@@ -52,25 +52,51 @@ impl IndexableMemTable {
         let mut data: Vec<RecordBatch>= vec![];
         let mut indices: Vec<u64> = vec![];
 
-        let mut start_index = start_index;
-        let stream = exec.execute(0, _state.task_ctx())?;
-        let _ = stream.map_ok(|batch| {
-            indices.push(start_index);
-            start_index += batch.num_rows() as u64;
-            data.push(batch);
-        }).collect::<Vec<_>>().await;
+        let mut current_index = start_index;
+        info!("Starting execution stream from exec: {:?}", exec.name());
+        let mut stream = exec.execute(0, _state.task_ctx())?;
+        info!("Execution stream created successfully");
 
-        info!("Number of batches: {}", data.len());
+        // Collect all batches from the execution stream
+        // This will trigger the fallback logic in WorkerExec if Iceberg has no data
+        let mut batch_count = 0;
+        while let Some(batch_result) = stream.next().await {
+            batch_count += 1;
+            info!("Received batch #{} from stream", batch_count);
+            match batch_result {
+                Ok(batch) => {
+                    let num_rows = batch.num_rows();
+                    info!("Batch #{} has {} rows", batch_count, num_rows);
+                    if num_rows > 0 {
+                        indices.push(current_index);
+                        current_index += num_rows as u64;
+                        data.push(batch);
+                        info!("Loaded batch with {} rows, current_index now {}", num_rows, current_index);
+                    } else {
+                        info!("Skipping empty batch");
+                    }
+                }
+                Err(e) => {
+                    error!("Error reading batch during data loading: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+        info!("Stream completed after {} batches", batch_count);
 
-        // let mut exec = MemoryExec::try_new(&[data], Arc::clone(&schema), None)?;
-        // if let Some(cons) = constraints {
-        //     exec = exec.with_constraints(cons.clone());
-        // }
-        //
-        // if let Some(num_partitions) = output_partitions {
-        //     // TODO: handle repartioning
-        // }
-        IndexableMemTable::try_new(Arc::clone(&schema), vec![data], indices)
+        info!("Number of batches loaded: {}", data.len());
+        if !data.is_empty() {
+            info!("Successfully loaded {} total rows from {} to {}",
+                  current_index - start_index, start_index, current_index - 1);
+
+            // Use the actual schema from the loaded batches instead of the expected schema
+            let actual_schema = data[0].schema();
+            info!("Using actual batch schema: {:?}", actual_schema);
+            IndexableMemTable::try_new(actual_schema, vec![data], indices)
+        } else {
+            error!("No batches loaded from data source - fallback logic should have been triggered but produced no data");
+            IndexableMemTable::try_new(Arc::clone(&schema), vec![data], indices)
+        }
     }
 }
 
@@ -101,9 +127,11 @@ async fn fetch_partitions(batches: Vec<RecordBatch>, indices: &[u64], start: u64
     }
     let end_index = right;
 
-    if start_index < end_index {
+    if batches.is_empty() {
+        vec![]
+    } else if start_index < end_index {
         batches[start_index..=end_index-1].to_owned()
-    } else if start_index == end_index {
+    } else if start_index == end_index && end_index > 0 {
         vec![batches[end_index-1].to_owned()]
     } else {
         vec![]

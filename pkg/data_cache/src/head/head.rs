@@ -11,7 +11,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::{execute_stream};
 use futures::StreamExt;
 use tracing::{info, error};
-use arrow_cache::config::config::CacheConfig;
+use crate::config::config::CacheConfig;
 use crate::head::provider::DataFileTableProvider;
 use crate::head::writer::DistributedWriterExec;
 

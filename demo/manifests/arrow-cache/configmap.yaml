@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-config
+  namespace: arrow-cache
+data:
+  METADATA_LOC: "s3://ricardometadata/metadata/table.metadata.json"  # Replace with your metadata location
+  TABLE_NAME: "ricardotable"                   # Replace with your table name
+  SCHEMA_NAME: "ricardoschema"                 # Replace with your schema name
+  RUST_LOG: "info"
+  WORKER_RUNTIME: "KUBERNETES"
+  LWS_GROUP_SIZE: "2"
+  WORKER_SERVICE_NAME: "arrow-cache-worker-svc"
+  NAMESPACE: "arrow-cache"
+  # AWS Configuration
+  AWS_REGION: "us-east-1"  # Set your AWS region
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-worker-map
+  namespace: arrow-cache
+data:
+  worker-mapping.json: |
+    {
+      "workers": [
+        {
+          "host": "arrow-cache-worker-0.arrow-cache-worker-svc.arrow-cache.svc.cluster.local",
+          "port": 50051
+        },
+        {
+          "host": "arrow-cache-worker-1.arrow-cache-worker-svc.arrow-cache.svc.cluster.local",
+          "port": 50051
+        }
+      ]
+    }

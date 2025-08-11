@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-config
+  namespace: arrow-cache
+data:
+  METADATA_LOC: "s3://ricardometadata"  # Replace with your metadata location
+  TABLE_NAME: "ricardotable"                   # Replace with your table name
+  SCHEMA_NAME: "your_schema"                 # Replace with your schema name
+  RUST_LOG: "info"
+  WORKER_RUNTIME: "KUBERNETES"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-worker-map
+  namespace: arrow-cache
+data:
+  worker-mapping.json: |
+    {
+      "workers": [
+        {
+          "host": "arrow-cache-worker-0.arrow-cache-worker-svc.arrow-cache.svc.cluster.local",
+          "port": 50051
+        },
+        {
+          "host": "arrow-cache-worker-1.arrow-cache-worker-svc.arrow-cache.svc.cluster.local",
+          "port": 50051
+        }
+      ]
+    }

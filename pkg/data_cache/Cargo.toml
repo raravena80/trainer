@@ -1,7 +1,7 @@
 [package]
 name = "arrow_cache"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 tracing = "0.1.41"
@@ -12,14 +12,16 @@ arrow = "55.0.0"
 arrow-schema = "55.0.0"
 serde = "1.0.188"
 async-trait = "0.1.86"
-iceberg-datafusion = "0.5.0"
-iceberg = "0.5.0"
+iceberg-datafusion = "0.6.0"
+iceberg = "0.6.0"
 futures = "0.3.31"
 arrow-flight = "55.0.0"
 tonic = "0.12.3"
 bytes = "1.9.0"
 bincode = "1.3"
 trust-dns-resolver = "*"
+object_store = { version = "0.12.1", features = ["aws"] }
+url = "2.5.4"
 
 [dev-dependencies]
 tokio = { version = "1.41.1", features = ["full"] }
@@ -31,4 +33,3 @@ path = "src/head/bin/main.rs"
 [[bin]]
 name = "worker"
 path = "src/worker/bin/main.rs"
-

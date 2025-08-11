@@ -1,0 +1,15 @@
+name: arrow-cache-demo
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pandas>=2.0
+  - pyarrow>=14.0
+  - numpy>=1.24
+  - pip
+  - jupyter
+  - ipython
+  - pip:
+    - grpcio>=1.50.0
+    - grpcio-tools>=1.50.0
