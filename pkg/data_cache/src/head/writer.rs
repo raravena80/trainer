@@ -17,7 +17,7 @@ use datafusion::common::exec_err;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use futures::{StreamExt, TryStreamExt};
 use tracing::{info, error};
-use arrow_cache::config::config::CacheConfig;
+use crate::config::config::CacheConfig;
 
 /// Execution plan for distributed writing to worker nodes via Apache Arrow Flight.
 ///
@@ -51,11 +51,11 @@ use arrow_cache::config::config::CacheConfig;
 /// │  Input Plan     │───▶│ Distributed     │───▶│  Worker Node 1  │
 /// │ (worker tasks)  │    │  WriterExec     │    │  (via Flight)   │
 /// └─────────────────┘    └─────────────────┘    └─────────────────┘
-///                                 │                       
+///                                 │
 ///                                 ├──────────────────────▶│  Worker Node 2  │
 ///                                 │                       │  (via Flight)   │
 ///                                 │                       └─────────────────┘
-///                                 │                       
+///                                 │
 ///                                 └──────────────────────▶│  Worker Node N  │
 ///                                                         │  (via Flight)   │
 ///                                                         └─────────────────┘
@@ -257,7 +257,7 @@ impl ExecutorClient {
 
         Ok(Self { flight_client })
     }
-    
+
     pub async fn send_batch(&mut self, schema: SchemaRef, record_batches: Vec<arrow_flight::error::Result<RecordBatch>>) -> Result<SendableRecordBatchStream> {
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .build(futures::stream::iter(record_batches.into_iter()));

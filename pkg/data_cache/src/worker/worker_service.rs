@@ -13,7 +13,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
-use arrow_cache::config::config::DatasetConfig;
+use crate::config::config::DatasetConfig;
 use crate::worker::worker::DataLoader;
 
 /// Worker node service implementing Apache Arrow Flight protocol for distributed caching.
@@ -64,7 +64,7 @@ use crate::worker::worker::DataLoader;
 ///
 /// - [`DataLoader`]: Loads assigned data files into memory tables
 /// - [`IndexPair`]: Represents row range queries in tickets
-pub(crate) struct WorkerService {
+pub struct WorkerService {
     metadata_loc: String,
     table_name: String,
     schema_name: String,
@@ -119,7 +119,7 @@ impl FlightService for WorkerService {
     /// # Example Query
     ///
     /// ```sql
-    /// SELECT * EXCEPT(cache_index) FROM memtable 
+    /// SELECT * EXCEPT(cache_index) FROM memtable
     /// WHERE cache_index >= {start} AND cache_index <= {end}
     /// ```
     async fn do_get(
@@ -242,7 +242,7 @@ impl FlightService for WorkerService {
                                           self.schema_name.clone(),
                                           file_urls,
                                           start_index).await.map_err(|e| Status::internal(format!("Failed to create data loader: {}", e)))?;
-        let _ = data_loader.load_data(&self.ctx.clone(), "memtable", start_index).await;
+        data_loader.load_data(&self.ctx.clone(), "memtable", start_index).await.map_err(|e| Status::internal(format!("Failed to load data: {}", e)))?;
         let df = self.ctx.sql(format!("select cache_index from memtable where cache_index >= {} and cache_index <= {}", start_index, start_index).as_str())
             .await.map_err(|e| Status::internal(format!("SQL error: {}", e)))?
             .collect()
@@ -266,6 +266,17 @@ impl FlightService for WorkerService {
 
     async fn list_actions(&self, _request: Request<Empty>) -> Result<Response<Self::ListActionsStream>, Status> {
         todo!()
+    }
+}
+
+impl WorkerService {
+    pub fn new(metadata_loc: String, table_name: String, schema_name: String, ctx: Arc<SessionContext>) -> Self {
+        Self {
+            metadata_loc,
+            table_name,
+            schema_name,
+            ctx,
+        }
     }
 }
 
