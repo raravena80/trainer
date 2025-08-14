@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use arrow::array::UInt64Array;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
@@ -10,7 +11,8 @@ use datafusion::sql::TableReference;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::{execute_stream};
 use futures::StreamExt;
-use tracing::{info, error};
+use tracing::{info, error, warn};
+use tokio::time::{interval, sleep};
 use crate::config::config::CacheConfig;
 use crate::head::provider::DataFileTableProvider;
 use crate::head::writer::DistributedWriterExec;
@@ -24,6 +26,7 @@ pub struct Distributor {
     arrow_schema: SchemaRef,
     pub(crate) total_row_count: i64,
     config: Arc<CacheConfig>,
+    retry_task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Distributor {
@@ -43,6 +46,7 @@ impl Distributor {
             arrow_schema,
             total_row_count: 0,
             config,
+            retry_task_handle: None,
         }
     }
 
@@ -62,6 +66,10 @@ impl Distributor {
         }
 
         self.distribute_data_files().await?;
+
+        // Start periodic retry task if configured
+        self.start_periodic_retry_task().await;
+
         Ok(())
     }
 
@@ -114,5 +122,97 @@ impl Distributor {
             self.ctx.task_ctx(),
         )?.collect::<Vec<_>>().await;
         Ok(())
+    }
+
+    /// Start a background task that periodically retries data distribution to any workers
+    /// that may have failed during initial distribution or restarted
+    async fn start_periodic_retry_task(&mut self) {
+        let retry_interval_seconds: u64 = std::env::var("ARROW_CACHE_PERIODIC_RETRY_INTERVAL_SECONDS")
+            .unwrap_or_else(|_| "30".to_string()) // Default: retry every 30 seconds
+            .parse()
+            .unwrap_or(30);
+
+        if retry_interval_seconds == 0 {
+            info!("Periodic retry disabled (ARROW_CACHE_PERIODIC_RETRY_INTERVAL_SECONDS=0)");
+            return;
+        }
+
+        info!("Starting periodic retry task (interval: {}s)", retry_interval_seconds);
+
+        let ctx = self.ctx.clone();
+        let num_workers = self.num_workers;
+        let mem_table_name = self.mem_table_name.clone();
+        let worker_map = self.worker_map.clone();
+        let arrow_schema = self.arrow_schema.clone();
+        let config = self.config.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut retry_interval = interval(Duration::from_secs(retry_interval_seconds));
+            retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                retry_interval.tick().await;
+
+                info!("Attempting periodic data redistribution to workers");
+
+                match Self::periodic_distribute_data_files(
+                    &ctx,
+                    num_workers,
+                    &mem_table_name,
+                    worker_map.clone(),
+                    arrow_schema.clone(),
+                    config.clone()
+                ).await {
+                    Ok(_) => {
+                        info!("Periodic data redistribution completed successfully");
+                    },
+                    Err(e) => {
+                        warn!("Periodic data redistribution failed: {}", e);
+                    }
+                }
+            }
+        });
+
+        self.retry_task_handle = Some(handle);
+    }
+
+    /// Periodic version of distribute_data_files that can be called from background task
+    async fn periodic_distribute_data_files(
+        ctx: &Arc<SessionContext>,
+        num_workers: usize,
+        mem_table_name: &str,
+        worker_map: Arc<HashMap<String, String>>,
+        arrow_schema: SchemaRef,
+        config: Arc<CacheConfig>
+    ) -> Result<()> {
+        let table = ctx.table_provider(TableReference::parse_str(mem_table_name)).await
+            .map_err(|err: DataFusionError| {
+                error!("Error retrieving table for periodic retry: {}", err);
+                err
+            })?;
+        let plan = table.scan(&ctx.state(), None, &[], None).await?;
+        let plan = RepartitionExec::try_new(
+            plan, Partitioning::RoundRobinBatch(num_workers))?;
+        let plan = DistributedWriterExec::new(
+            Arc::new(plan),
+            worker_map,
+            arrow_schema,
+            num_workers,
+            config
+        );
+        let _ = execute_stream(
+            Arc::new(plan),
+            ctx.task_ctx(),
+        )?.collect::<Vec<_>>().await;
+        Ok(())
+    }
+}
+
+/// Cleanup implementation to properly shutdown retry task
+impl Drop for Distributor {
+    fn drop(&mut self) {
+        if let Some(handle) = self.retry_task_handle.take() {
+            handle.abort();
+        }
     }
 }
