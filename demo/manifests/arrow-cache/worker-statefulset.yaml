@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
       - name: worker
-        image: arrow-cache:latest
+        image: arrow-cache-demo:latest
         imagePullPolicy: Never  # For local kind cluster
         command: ["/usr/local/bin/worker"]
         args: ["0.0.0.0", "50051"]

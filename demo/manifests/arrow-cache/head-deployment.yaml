@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: head
-        image: arrow-cache:latest
+        image: arrow-cache-demo:latest
         imagePullPolicy: Never  # For local kind cluster
         command: ["/usr/local/bin/head"]
         args: ["0.0.0.0", "50051"]
@@ -79,13 +79,13 @@ spec:
             secretKeyRef:
               name: aws-credentials
               key: AWS_ACCESS_KEY_ID
-              optional: true
+              optional: false
         - name: AWS_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
               name: aws-credentials
               key: AWS_SECRET_ACCESS_KEY
-              optional: true
+              optional: false
         - name: AWS_SESSION_TOKEN
           valueFrom:
             secretKeyRef:

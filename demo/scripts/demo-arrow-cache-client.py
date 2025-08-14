@@ -168,7 +168,14 @@ class ArrowCacheClient:
 
             # List files in the data directory
             result = subprocess.run(
-                ["aws", "s3", "ls", data_prefix, "--recursive"],
+                [
+                    "aws",
+                    "s3",
+                    "ls",
+                    data_prefix,
+                    "--recursive",
+                    "--profile=root-ricardo",
+                ],
                 capture_output=True,
                 text=True,
                 check=True,

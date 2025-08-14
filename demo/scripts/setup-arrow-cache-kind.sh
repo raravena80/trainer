@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 CLUSTER_NAME=${CLUSTER_NAME:-"arrow-cache-demo"}
-IMAGE_NAME="arrow-cache:latest"
+IMAGE_NAME="arrow-cache-demo:latest"
 NAMESPACE="arrow-cache"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEMO_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -91,6 +91,7 @@ nodes:
     protocol: TCP
 - role: worker
 - role: worker
+- role: worker
 EOF
 
         kind create cluster --name "$CLUSTER_NAME" --config /tmp/kind-config.yaml
@@ -115,25 +116,18 @@ build_docker_image() {
     success "Docker image built and loaded into kind cluster."
 }
 
-update_configuration() {
-    log "Updating configuration files..."
+setup_aws_credentials() {
+    log "Setting up AWS credentials..."
 
-    # Prompt for configuration values or use defaults
-    read -p "Enter metadata location (e.g., gs://your-bucket/metadata): " metadata_loc
-    read -p "Enter table name: " table_name
-    read -p "Enter schema name: " schema_name
-
-    if [[ -z "$metadata_loc" || -z "$table_name" || -z "$schema_name" ]]; then
-        warn "Using default configuration values. Update demo/manifests/arrow-cache/configmap.yaml manually if needed."
-        return
+    # Check if setup-aws.sh exists
+    if [[ -f "$SCRIPT_DIR/setup-aws.sh" ]]; then
+        log "Running AWS setup..."
+        bash "$SCRIPT_DIR/setup-aws.sh" --from-cli
+        success "AWS credentials configured"
+    else
+        warn "setup-aws.sh not found. Skipping AWS credentials setup."
+        warn "You'll need to configure AWS credentials manually if using S3 data."
     fi
-
-    # Update configmap with user values
-    sed -i.bak "s|gs://your-bucket/metadata|$metadata_loc|g" "$DEMO_ROOT/manifests/arrow-cache/configmap.yaml"
-    sed -i.bak "s|your_table|$table_name|g" "$DEMO_ROOT/manifests/arrow-cache/configmap.yaml"
-    sed -i.bak "s|your_schema|$schema_name|g" "$DEMO_ROOT/manifests/arrow-cache/configmap.yaml"
-
-    success "Configuration updated."
 }
 
 deploy_arrow_cache() {
@@ -238,8 +232,8 @@ main() {
     check_prerequisites
     create_kind_cluster
     build_docker_image
-    update_configuration
     deploy_arrow_cache
+    setup_aws_credentials
     show_status
 
     echo
