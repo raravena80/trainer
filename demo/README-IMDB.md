@@ -13,11 +13,14 @@ This demo showcases the distributed Arrow Cache system using real IMDB movie rev
 
 ## Dataset Details
 
-The IMDB dataset was created using the `hf_to_iceberg.py` script:
+The IMDB dataset can be created using the complete ingestion script:
 
 ```bash
-python hf_to_iceberg.py --output s3://ricardo.hf.datasets/iceberg --dataset imdb --table imdb_reviews --profile root-ricardo
+# From the scripts/imdb/ directory
+python3 ingest_imdb_to_iceberg.py
 ```
+
+**New One-Step Process:** This script handles everything - downloads from HuggingFace, creates S3/Glue resources, and ingests directly into Iceberg.
 
 This created an Iceberg table with the following structure:
 - **Database**: `hf_datasets`
