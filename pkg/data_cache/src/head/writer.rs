@@ -1,4 +1,4 @@
-use crate::config::config::CacheConfig;
+use super::config::config::CacheConfig;
 use arrow::array::UInt64Array;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::FlightClient;

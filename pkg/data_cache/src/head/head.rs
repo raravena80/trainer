@@ -1,4 +1,4 @@
-use crate::config::config::CacheConfig;
+use super::config::config::CacheConfig;
 use crate::head::provider::DataFileTableProvider;
 use crate::head::writer::DistributedWriterExec;
 use arrow::array::UInt64Array;
@@ -14,7 +14,7 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::{interval, sleep};
+use tokio::time::interval;
 use tracing::{error, info, warn};
 
 pub struct Distributor {

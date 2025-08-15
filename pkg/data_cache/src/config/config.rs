@@ -13,6 +13,7 @@ pub struct DatasetConfig {
 /// Comprehensive configuration for the data cache system
 /// Consolidates all environment variables used across the application
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CacheConfig {
     pub dataset: DatasetConfig,
     pub connect_timeout: Duration,
@@ -31,6 +32,7 @@ impl DatasetConfig {
     }
 }
 
+#[allow(dead_code)]
 impl CacheConfig {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let dataset = DatasetConfig::from_env()?;
@@ -50,11 +52,13 @@ impl CacheConfig {
 
     /// Create shared configuration from environment variables
     /// Returns Arc<CacheConfig> for efficient sharing across components
+    #[allow(dead_code)]
     pub fn shared_from_env() -> Result<Arc<Self>, Box<dyn std::error::Error>> {
         Ok(Arc::new(Self::from_env()?))
     }
 
     /// Create a new configuration with custom timeout
+    #[allow(dead_code)]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self

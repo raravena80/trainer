@@ -30,14 +30,14 @@ struct Args {
     /// Head node endpoint URL
     #[arg(long, env = "HEAD_NODE_ENDPOINT", default_value = "http://localhost:50051")]
     endpoint: String,
-    
+
     /// Local rank for this client instance
     #[arg(long, env = "LOCAL_RANK", default_value = "1")]
     local_rank: String,
-    
+
     /// Total number of ranks in the distributed setup
-    #[arg(long, env = "TOTAL_RANK", default_value = "3")]
-    total_rank: String,
+    #[arg(long, env = "WORLD_SIZE", default_value = "3")]
+    world_size: String,
 }
 /// Sample client main function that demonstrates accessing cached datasets.
 ///
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let descriptor = FlightDescriptor {
         r#type: 1,
         cmd: Default::default(),
-        path: vec![args.local_rank.clone(), args.total_rank.clone()],
+        path: vec![args.local_rank.clone(), args.world_size.clone()],
     };
 
     let response = client.get_flight_info(descriptor).await?;

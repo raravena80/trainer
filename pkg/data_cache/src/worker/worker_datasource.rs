@@ -13,7 +13,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{future, Stream, StreamExt, TryStreamExt};
 use iceberg::TableIdent;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::io::FileIO;
@@ -23,7 +23,6 @@ use iceberg_datafusion::{from_datafusion_error, to_datafusion_error};
 use object_store::aws::AmazonS3Builder;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -586,6 +585,7 @@ async fn read_stream(
     Ok(Box::pin(stream))
 }
 
+#[allow(dead_code)]
 async fn filter_and_create_stream(
     result: Result<FileScanTaskStream>,
     file_urls: Arc<Vec<String>>,

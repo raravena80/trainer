@@ -1,10 +1,9 @@
 use crate::head::head::Distributor;
 use crate::head::provider::DataFileTableProvider;
-use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::{
     Action, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, Location, PollInfo, PutResult, SchemaResult, Ticket,
-    flight_service_server::FlightService,
+    flight_service_server::{FlightService, FlightServiceServer},
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bincode;
@@ -68,6 +67,7 @@ pub struct HeadService {
 }
 
 impl HeadService {
+    #[allow(dead_code)]
     pub fn new(distributor: Distributor) -> Self {
         Self { distributor }
     }
@@ -276,7 +276,7 @@ impl FlightService for HeadService {
     }
 }
 
-use crate::config::config::CacheConfig;
+use super::config::config::CacheConfig;
 use serde::{Deserialize, Serialize};
 
 /// Represents a row range for distributed query execution.

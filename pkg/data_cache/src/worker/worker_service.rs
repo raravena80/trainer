@@ -1,4 +1,4 @@
-use crate::config::config::DatasetConfig;
+use super::config::config::DatasetConfig;
 use crate::worker::worker::DataLoader;
 use arrow::array::{ListArray, StringViewArray, UInt64Array};
 use arrow_flight::decode::FlightRecordBatchStream;
@@ -336,6 +336,7 @@ impl FlightService for WorkerService {
 }
 
 impl WorkerService {
+    #[allow(dead_code)]
     pub fn new(
         metadata_loc: String,
         table_name: String,

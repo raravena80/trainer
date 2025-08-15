@@ -2,13 +2,13 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Constraints, DataFusionError, ScalarValue, plan_err};
+use datafusion::common::{Constraints, DataFusionError, ScalarValue, exec_err, plan_err};
 use datafusion::datasource::TableType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{BinaryExpr, Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -188,7 +188,7 @@ impl TableProvider for IndexableMemTable {
                 )
             })?;
             (start, start)
-        } else {
+        } else if _filters.len() == 2 {
             info!("{:?}", _filters[0]);
             info!("{:?}", _filters[1]);
             let start = collect_literals(&_filters[0]).ok_or_else(|| {
@@ -202,6 +202,8 @@ impl TableProvider for IndexableMemTable {
                 )
             })?;
             (start, end)
+        } else {
+            return exec_err!("Incorrect filters");
         };
         let partitions = fetch_partitions(self.batches.clone(), &self.indices, start, end).await;
 
