@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: arrow-cache-imdb
+
+resources:
+- namespace.yaml
+- configmap.yaml
+- aws-secret.yaml
+- worker-statefulset.yaml
+- head-deployment.yaml
+
+images:
+- name: arrow-cache
+  newTag: latest
+
+commonLabels:
+  app.kubernetes.io/name: arrow-cache-imdb
+  app.kubernetes.io/part-of: trainer
+  app.kubernetes.io/component: distributed-cache
