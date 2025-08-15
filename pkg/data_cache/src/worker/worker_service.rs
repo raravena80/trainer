@@ -1,20 +1,24 @@
-use arrow_flight::{flight_service_server::{FlightService}, Action, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket};
-use futures::{Stream, StreamExt, TryStreamExt};
-use std::pin::Pin;
-use std::sync::Arc;
+use crate::config::config::DatasetConfig;
+use crate::worker::worker::DataLoader;
 use arrow::array::{ListArray, StringViewArray, UInt64Array};
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightServiceServer;
+use arrow_flight::{
+    Action, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
+    HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService,
+};
 use arrow_schema::DataType;
 use bytes::Bytes;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
+use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
-use crate::config::config::DatasetConfig;
-use crate::worker::worker::DataLoader;
 
 /// Worker node service implementing Apache Arrow Flight protocol for distributed caching.
 ///
@@ -73,13 +77,18 @@ pub struct WorkerService {
 
 #[tonic::async_trait]
 impl FlightService for WorkerService {
-    type HandshakeStream = Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
-    type ListFlightsStream = Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
+    type HandshakeStream =
+        Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
+    type ListFlightsStream =
+        Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
     type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
     type DoPutStream = Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
-    type DoExchangeStream = Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
-    type DoActionStream = Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
-    type ListActionsStream = Pin<Box<dyn Stream<Item = Result<arrow_flight::ActionType, Status>> + Send + 'static>>;
+    type DoExchangeStream =
+        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
+    type DoActionStream =
+        Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
+    type ListActionsStream =
+        Pin<Box<dyn Stream<Item = Result<arrow_flight::ActionType, Status>> + Send + 'static>>;
 
     async fn get_schema(
         &self,
@@ -128,31 +137,47 @@ impl FlightService for WorkerService {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         info!("querying worker");
         let ticket = request.into_inner();
-        let pair = bincode::deserialize::<IndexPair>(&ticket.ticket).map_err(|e| Status::internal(format!("Deserialization error: {}", e)))?;
+        let pair = bincode::deserialize::<IndexPair>(&ticket.ticket)
+            .map_err(|e| Status::internal(format!("Deserialization error: {}", e)))?;
         info!("{:?}", pair);
         let df = self.ctx.sql(format!("select * except(cache_index) from memtable where cache_index >= {} and cache_index <= {}", pair.start, pair.end).as_str()).await
             .map_err(|e| Status::internal(format!("Error executing query: {}", e)))?;
-        let stream = df.execute_stream().await
+        let stream = df
+            .execute_stream()
+            .await
             .map_err(|e| Status::internal(format!("Error creating stream: {}", e)))?;
 
         let encoder = FlightDataEncoderBuilder::new()
-            .build(stream.map_err(|e| FlightError::ExternalError(Box::new(e)))).map_err(Status::from);
+            .build(stream.map_err(|e| FlightError::ExternalError(Box::new(e))))
+            .map_err(Status::from);
         Ok(Response::new(Box::pin(encoder)))
     }
 
-    async fn handshake(&self, _request: Request<Streaming<HandshakeRequest>>) -> Result<Response<Self::HandshakeStream>, Status> {
+    async fn handshake(
+        &self,
+        _request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<Response<Self::HandshakeStream>, Status> {
         todo!()
     }
 
-    async fn list_flights(&self, _request: Request<Criteria>) -> Result<Response<Self::ListFlightsStream>, Status> {
+    async fn list_flights(
+        &self,
+        _request: Request<Criteria>,
+    ) -> Result<Response<Self::ListFlightsStream>, Status> {
         todo!()
     }
 
-    async fn get_flight_info(&self, _request: Request<FlightDescriptor>) -> Result<Response<FlightInfo>, Status> {
+    async fn get_flight_info(
+        &self,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
         todo!()
     }
 
-    async fn poll_flight_info(&self, _request: Request<FlightDescriptor>) -> Result<Response<PollInfo>, Status> {
+    async fn poll_flight_info(
+        &self,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
         todo!()
     }
 
@@ -202,25 +227,45 @@ impl FlightService for WorkerService {
     ///
     /// - [`DataLoader`]: Handles the actual file loading process
     /// - [`do_get`]: Serves queries against the loaded data
-    async fn do_put(&self, request: Request<Streaming<FlightData>>) -> Result<Response<Self::DoPutStream>, Status> {
-        let record_batch = FlightRecordBatchStream::new_from_flight_data(request.into_inner().map_err(|e| e.into())).try_next()
-            .await.map_err(|e| Status::internal(format!("Flight data error: {}", e)))?
-            .ok_or_else(|| Status::internal("No record batch received"))?;
-        let file_paths_column = record_batch.column_by_name("file_paths").ok_or_else(|| Status::internal("file_paths column not found"))?;
-        let start_indexes_column = record_batch.column_by_name("row_start_indexes").ok_or_else(|| Status::internal("row_start_indexes column not found"))?;
+    async fn do_put(
+        &self,
+        request: Request<Streaming<FlightData>>,
+    ) -> Result<Response<Self::DoPutStream>, Status> {
+        let record_batch = FlightRecordBatchStream::new_from_flight_data(
+            request.into_inner().map_err(|e| e.into()),
+        )
+        .try_next()
+        .await
+        .map_err(|e| Status::internal(format!("Flight data error: {}", e)))?
+        .ok_or_else(|| Status::internal("No record batch received"))?;
+        let file_paths_column = record_batch
+            .column_by_name("file_paths")
+            .ok_or_else(|| Status::internal("file_paths column not found"))?;
+        let start_indexes_column = record_batch
+            .column_by_name("row_start_indexes")
+            .ok_or_else(|| Status::internal("row_start_indexes column not found"))?;
 
         let file_urls;
         if let DataType::List(field) = file_paths_column.data_type() {
             if field.data_type() == &DataType::Utf8View {
-                let list_array = file_paths_column.as_any().downcast_ref::<ListArray>().ok_or_else(|| Status::internal("Failed to downcast to ListArray"))?;
+                let list_array = file_paths_column
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| Status::internal("Failed to downcast to ListArray"))?;
                 let values = list_array.values();
-                let string_array = values.as_any().downcast_ref::<StringViewArray>().ok_or_else(|| Status::internal("Failed to downcast to StringViewArray"))?;
+                let string_array = values
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .ok_or_else(|| Status::internal("Failed to downcast to StringViewArray"))?;
 
-                file_urls = string_array.iter()
+                file_urls = string_array
+                    .iter()
                     .map(|opt_str| opt_str.map(|s| s.to_string()).unwrap_or_default())
                     .collect();
             } else {
-                return Err(Status::internal("Expected List<Utf8>, found List with different item type"));
+                return Err(Status::internal(
+                    "Expected List<Utf8>, found List with different item type",
+                ));
             }
         } else {
             return Err(Status::internal("Expected List DataType"));
@@ -228,21 +273,33 @@ impl FlightService for WorkerService {
         info!("file_urls received in worker: {:?}", file_urls);
 
         let start_index = if let DataType::UInt64 = start_indexes_column.data_type() {
-            let list_array = start_indexes_column.as_any().downcast_ref::<UInt64Array>().ok_or_else(|| Status::internal("Failed to downcast to UInt64Array"))?;
+            let list_array = start_indexes_column
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| Status::internal("Failed to downcast to UInt64Array"))?;
             let values = list_array.values();
-            *values.first().ok_or_else(|| Status::internal("No start index found"))?
+            *values
+                .first()
+                .ok_or_else(|| Status::internal("No start index found"))?
         } else {
             return Err(Status::internal("Expected UInt64 DataType"));
         };
 
         info!("start_index received in worker: {:?}", start_index);
 
-        let data_loader = DataLoader::new(self.metadata_loc.clone(),
-                                          self.table_name.clone(),
-                                          self.schema_name.clone(),
-                                          file_urls,
-                                          start_index).await.map_err(|e| Status::internal(format!("Failed to create data loader: {}", e)))?;
-        data_loader.load_data(&self.ctx.clone(), "memtable", start_index).await.map_err(|e| Status::internal(format!("Failed to load data: {}", e)))?;
+        let data_loader = DataLoader::new(
+            self.metadata_loc.clone(),
+            self.table_name.clone(),
+            self.schema_name.clone(),
+            file_urls,
+            start_index,
+        )
+        .await
+        .map_err(|e| Status::internal(format!("Failed to create data loader: {}", e)))?;
+        data_loader
+            .load_data(&self.ctx.clone(), "memtable", start_index)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to load data: {}", e)))?;
         let df = self.ctx.sql(format!("select cache_index from memtable where cache_index >= {} and cache_index <= {}", start_index, start_index).as_str())
             .await.map_err(|e| Status::internal(format!("SQL error: {}", e)))?
             .collect()
@@ -256,21 +313,35 @@ impl FlightService for WorkerService {
         Ok(Response::new(stream.boxed()))
     }
 
-    async fn do_exchange(&self, _request: Request<Streaming<FlightData>>) -> Result<Response<Self::DoExchangeStream>, Status> {
+    async fn do_exchange(
+        &self,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<Response<Self::DoExchangeStream>, Status> {
         todo!()
     }
 
-    async fn do_action(&self, _request: Request<Action>) -> Result<Response<Self::DoActionStream>, Status> {
+    async fn do_action(
+        &self,
+        _request: Request<Action>,
+    ) -> Result<Response<Self::DoActionStream>, Status> {
         todo!()
     }
 
-    async fn list_actions(&self, _request: Request<Empty>) -> Result<Response<Self::ListActionsStream>, Status> {
+    async fn list_actions(
+        &self,
+        _request: Request<Empty>,
+    ) -> Result<Response<Self::ListActionsStream>, Status> {
         todo!()
     }
 }
 
 impl WorkerService {
-    pub fn new(metadata_loc: String, table_name: String, schema_name: String, ctx: Arc<SessionContext>) -> Self {
+    pub fn new(
+        metadata_loc: String,
+        table_name: String,
+        schema_name: String,
+        ctx: Arc<SessionContext>,
+    ) -> Self {
         Self {
             metadata_loc,
             table_name,
@@ -280,15 +351,18 @@ impl WorkerService {
     }
 }
 
-pub async fn run(host: &String, port: &String) -> datafusion::common::Result<(), Box<dyn std::error::Error>> {
-    let config = SessionConfig::new()
-        .with_batch_size(1024);
+pub async fn run(
+    host: &String,
+    port: &String,
+) -> datafusion::common::Result<(), Box<dyn std::error::Error>> {
+    let config = SessionConfig::new().with_batch_size(1024);
     let ctx = Arc::new(SessionContext::new_with_config(config));
     let addr = format!("{host}:{port}").parse()?;
-    let dataset_config = DatasetConfig::from_env().map_err(|e| format!("Failed to load dataset config: {}", e))?;
+    let dataset_config =
+        DatasetConfig::from_env().map_err(|e| format!("Failed to load dataset config: {}", e))?;
 
     let service = WorkerService {
-        metadata_loc:  dataset_config.metadata_loc,
+        metadata_loc: dataset_config.metadata_loc,
         table_name: dataset_config.table_name,
         schema_name: dataset_config.schema_name,
         ctx: ctx.clone(),
@@ -296,7 +370,8 @@ pub async fn run(host: &String, port: &String) -> datafusion::common::Result<(),
     tonic::transport::Server::builder()
         .add_service(FlightServiceServer::new(service))
         .serve(addr)
-        .await.map_err(|e| format!("Error starting worker: {}", e))?;
+        .await
+        .map_err(|e| format!("Error starting worker: {}", e))?;
     Ok(())
 }
 

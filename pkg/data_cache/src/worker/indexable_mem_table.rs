@@ -1,27 +1,31 @@
-use std::any::Any;
-use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{plan_err, Constraints, ScalarValue, DataFusionError};
-use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::common::{Constraints, DataFusionError, ScalarValue, plan_err};
 use datafusion::datasource::TableType;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{BinaryExpr, Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::{StreamExt, TryStreamExt};
-use tracing::{info, error};
+use std::any::Any;
+use std::sync::Arc;
+use tracing::{error, info};
 
 #[derive(Debug)]
 pub struct IndexableMemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<RecordBatch>,
-    pub(crate) indices: Vec<u64>
+    pub(crate) indices: Vec<u64>,
 }
 
 impl IndexableMemTable {
-    pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>, indices: Vec<u64>) -> datafusion::common::Result<Self> {
+    pub fn try_new(
+        schema: SchemaRef,
+        partitions: Vec<Vec<RecordBatch>>,
+        indices: Vec<u64>,
+    ) -> datafusion::common::Result<Self> {
         for batches in partitions.iter().flatten() {
             let batches_schema = batches.schema();
             if !schema.contains(&batches_schema) {
@@ -36,7 +40,7 @@ impl IndexableMemTable {
         Ok(Self {
             schema,
             batches: partitions.into_iter().flatten().collect(),
-            indices
+            indices,
         })
     }
 
@@ -49,7 +53,7 @@ impl IndexableMemTable {
         let schema = t.schema();
         let exec = t.scan(_state, None, &[], None).await?;
 
-        let mut data: Vec<RecordBatch>= vec![];
+        let mut data: Vec<RecordBatch> = vec![];
         let mut indices: Vec<u64> = vec![];
 
         let mut current_index = start_index;
@@ -71,7 +75,10 @@ impl IndexableMemTable {
                         indices.push(current_index);
                         current_index += num_rows as u64;
                         data.push(batch);
-                        info!("Loaded batch with {} rows, current_index now {}", num_rows, current_index);
+                        info!(
+                            "Loaded batch with {} rows, current_index now {}",
+                            num_rows, current_index
+                        );
                     } else {
                         info!("Skipping empty batch");
                     }
@@ -86,22 +93,32 @@ impl IndexableMemTable {
 
         info!("Number of batches loaded: {}", data.len());
         if !data.is_empty() {
-            info!("Successfully loaded {} total rows from {} to {}",
-                  current_index - start_index, start_index, current_index - 1);
+            info!(
+                "Successfully loaded {} total rows from {} to {}",
+                current_index - start_index,
+                start_index,
+                current_index - 1
+            );
 
             // Use the actual schema from the loaded batches instead of the expected schema
             let actual_schema = data[0].schema();
             info!("Using actual batch schema: {:?}", actual_schema);
             IndexableMemTable::try_new(actual_schema, vec![data], indices)
         } else {
-            error!("No batches loaded from data source - fallback logic should have been triggered but produced no data");
+            error!(
+                "No batches loaded from data source - fallback logic should have been triggered but produced no data"
+            );
             IndexableMemTable::try_new(Arc::clone(&schema), vec![data], indices)
         }
     }
 }
 
-async fn fetch_partitions(batches: Vec<RecordBatch>, indices: &[u64], start: u64, end: u64) -> Vec<RecordBatch> {
-
+async fn fetch_partitions(
+    batches: Vec<RecordBatch>,
+    indices: &[u64],
+    start: u64,
+    end: u64,
+) -> Vec<RecordBatch> {
     let mut left = 0;
     let mut right = indices.len();
 
@@ -130,13 +147,12 @@ async fn fetch_partitions(batches: Vec<RecordBatch>, indices: &[u64], start: u64
     if batches.is_empty() {
         vec![]
     } else if start_index < end_index {
-        batches[start_index..=end_index-1].to_owned()
+        batches[start_index..=end_index - 1].to_owned()
     } else if start_index == end_index && end_index > 0 {
-        vec![batches[end_index-1].to_owned()]
+        vec![batches[end_index - 1].to_owned()]
     } else {
         vec![]
     }
-
 }
 
 #[async_trait]
@@ -166,13 +182,25 @@ impl TableProvider for IndexableMemTable {
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         let (start, end) = if _filters.len() == 1 {
             info!("{:?}", _filters[0]);
-            let start = collect_literals(&_filters[0]).ok_or_else(|| DataFusionError::Execution("Failed to extract start value from first filter".to_string()))?;
+            let start = collect_literals(&_filters[0]).ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Failed to extract start value from first filter".to_string(),
+                )
+            })?;
             (start, start)
         } else {
             info!("{:?}", _filters[0]);
             info!("{:?}", _filters[1]);
-            let start = collect_literals(&_filters[0]).ok_or_else(|| DataFusionError::Execution("Failed to extract start value from first filter".to_string()))?;
-            let end = collect_literals(&_filters[1]).ok_or_else(|| DataFusionError::Execution("Failed to extract end value from second filter".to_string()))?;
+            let start = collect_literals(&_filters[0]).ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Failed to extract start value from first filter".to_string(),
+                )
+            })?;
+            let end = collect_literals(&_filters[1]).ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Failed to extract end value from second filter".to_string(),
+                )
+            })?;
             (start, end)
         };
         let partitions = fetch_partitions(self.batches.clone(), &self.indices, start, end).await;
@@ -187,16 +215,17 @@ impl TableProvider for IndexableMemTable {
         &self,
         filters: &[&Expr],
     ) -> datafusion::common::Result<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![
-            TableProviderFilterPushDown::Inexact;
-            filters.len()
-        ])
+        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
     }
 }
 
 fn collect_literals(expr: &Expr) -> Option<u64> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left: _, op: _, right }) => {
+        Expr::BinaryExpr(BinaryExpr {
+            left: _,
+            op: _,
+            right,
+        }) => {
             if let Expr::Literal(scalar) = &**right {
                 if let ScalarValue::UInt64(Some(val)) = scalar {
                     return Some(*val);
@@ -204,25 +233,23 @@ fn collect_literals(expr: &Expr) -> Option<u64> {
             }
             None
         }
-        _ => {
-           None
-        }
+        _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::UInt64Array;
     use arrow::{
         array::StringArray,
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
     use datafusion::assert_batches_eq;
-    use std::sync::Arc;
-    use arrow::array::UInt64Array;
     use datafusion::datasource::MemTable;
     use datafusion::prelude::{SessionConfig, SessionContext};
+    use std::sync::Arc;
 
     fn create_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
@@ -251,7 +278,6 @@ mod tests {
         ])
     }
 
-
     // #[test]
     // fn test_basic_and_condition_with_filter() {
     //     let expr = col("a").eq(lit(1u64)).and(col("b").eq(lit(2u64)));
@@ -268,14 +294,19 @@ mod tests {
         let batches = create_test_batches()?;
         let result = fetch_partitions(batches, &[0, 4], 0, 2).await;
 
-        assert_batches_eq!(["+----+------+",
-            "| id | name |",
-            "+----+------+",
-            "| 0  | A    |",
-            "| 1  | B    |",
-            "| 2  | C    |",
-            "| 3  | D    |",
-            "+----+------+"], &result);
+        assert_batches_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 0  | A    |",
+                "| 1  | B    |",
+                "| 2  | C    |",
+                "| 3  | D    |",
+                "+----+------+"
+            ],
+            &result
+        );
         Ok(())
     }
 
@@ -284,14 +315,19 @@ mod tests {
         let batches = create_test_batches()?;
         let result = fetch_partitions(batches, &[0, 4], 2, 2).await;
 
-        assert_batches_eq!(["+----+------+",
-            "| id | name |",
-            "+----+------+",
-            "| 0  | A    |",
-            "| 1  | B    |",
-            "| 2  | C    |",
-            "| 3  | D    |",
-            "+----+------+"], &result);
+        assert_batches_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 0  | A    |",
+                "| 1  | B    |",
+                "| 2  | C    |",
+                "| 3  | D    |",
+                "+----+------+"
+            ],
+            &result
+        );
         Ok(())
     }
 
@@ -301,18 +337,23 @@ mod tests {
         let result = fetch_partitions(batches, &[0, 4], 0, 4).await;
         // println!("{}", &result.get(0).unwrap().num_rows());
         // println!("{}", &result.get(1).unwrap().num_rows());
-        assert_batches_eq!(["+----+------+",
-            "| id | name |",
-            "+----+------+",
-            "| 0  | A    |",
-            "| 1  | B    |",
-            "| 2  | C    |",
-            "| 3  | D    |",
-            "| 4  | E    |",
-            "| 5  | F    |",
-            "| 6  | G    |",
-            "| 7  | H    |",
-            "+----+------+"], &result);
+        assert_batches_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 0  | A    |",
+                "| 1  | B    |",
+                "| 2  | C    |",
+                "| 3  | D    |",
+                "| 4  | E    |",
+                "| 5  | F    |",
+                "| 6  | G    |",
+                "| 7  | H    |",
+                "+----+------+"
+            ],
+            &result
+        );
         Ok(())
     }
 
@@ -320,42 +361,57 @@ mod tests {
     async fn test_indexable_mem_table_with_scan() -> Result<(), Box<dyn std::error::Error>> {
         let schema = create_schema();
         let rb = create_test_batches()?;
-        let mem_table = IndexableMemTable::try_new(schema, vec![rb], [0,4].to_vec())?;
+        let mem_table = IndexableMemTable::try_new(schema, vec![rb], [0, 4].to_vec())?;
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(mem_table))?;
-        let df = ctx.sql("SELECT id, name FROM test_table where id >= 0 AND id <= 2").await?;
+        let df = ctx
+            .sql("SELECT id, name FROM test_table where id >= 0 AND id <= 2")
+            .await?;
         let result = df.collect().await?;
-        assert_batches_eq!(["+----+------+",
-            "| id | name |",
-            "+----+------+",
-            "| 0  | A    |",
-            "| 1  | B    |",
-            "| 2  | C    |",
-            "+----+------+"], &result);
+        assert_batches_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 0  | A    |",
+                "| 1  | B    |",
+                "| 2  | C    |",
+                "+----+------+"
+            ],
+            &result
+        );
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_indexable_mem_table_with_load_and_scan() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_indexable_mem_table_with_load_and_scan() -> Result<(), Box<dyn std::error::Error>>
+    {
         let schema = create_schema();
         let rb = create_test_batches()?;
-        let config = SessionConfig::new()
-            .with_batch_size(1024);
+        let config = SessionConfig::new().with_batch_size(1024);
         let ctx = SessionContext::new_with_config(config);
         let mem_table = MemTable::try_new(schema, vec![rb])?;
-        let indexable_mem_table = IndexableMemTable::load(Arc::new(mem_table), None, &ctx.state(), 0).await?;
+        let indexable_mem_table =
+            IndexableMemTable::load(Arc::new(mem_table), None, &ctx.state(), 0).await?;
 
         ctx.register_table("test_table", Arc::new(indexable_mem_table))?;
-        let df = ctx.sql("SELECT id, name FROM test_table where id >= 0 AND id <= 2").await?;
+        let df = ctx
+            .sql("SELECT id, name FROM test_table where id >= 0 AND id <= 2")
+            .await?;
         let result = df.collect().await?;
-        assert_batches_eq!(["+----+------+",
-            "| id | name |",
-            "+----+------+",
-            "| 0  | A    |",
-            "| 1  | B    |",
-            "| 2  | C    |",
-            "+----+------+"], &result);
+        assert_batches_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 0  | A    |",
+                "| 1  | B    |",
+                "| 2  | C    |",
+                "+----+------+"
+            ],
+            &result
+        );
         Ok(())
     }
 }

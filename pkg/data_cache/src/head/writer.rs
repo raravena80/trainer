@@ -1,24 +1,26 @@
+use crate::config::config::CacheConfig;
+use arrow::array::UInt64Array;
+use arrow::record_batch::RecordBatch;
+use arrow_flight::FlightClient;
+use arrow_flight::encode::FlightDataEncoderBuilder;
+use arrow_schema::{DataType, SchemaRef};
+use datafusion::common::exec_err;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, PlanProperties,
+};
+use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use arrow::array::UInt64Array;
-use arrow::record_batch::RecordBatch;
-use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::FlightClient;
-use arrow_schema::{DataType, SchemaRef};
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, PlanProperties};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::error::{DataFusionError, Result};
-use datafusion::common::exec_err;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use futures::{StreamExt, TryStreamExt};
-use tracing::{info, error, warn};
-use crate::config::config::CacheConfig;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
+use tracing::{error, info, warn};
 
 /// Execution plan for distributed writing to worker nodes via Apache Arrow Flight.
 ///
@@ -98,11 +100,15 @@ pub struct DistributedWriterExec {
     config: Arc<CacheConfig>,
 }
 
-impl DisplayAs for DistributedWriterExec{
+impl DisplayAs for DistributedWriterExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "DistributedWriterExec: workers={}", self.worker_map.len())
+                write!(
+                    f,
+                    "DistributedWriterExec: workers={}",
+                    self.worker_map.len()
+                )
             }
             DisplayFormatType::TreeRender => {
                 write!(f, "workers={}", self.worker_map.len())
@@ -112,14 +118,20 @@ impl DisplayAs for DistributedWriterExec{
 }
 
 impl DistributedWriterExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>, worker_map: Arc<HashMap<String, String>>,  schema: SchemaRef, num_partitions: usize, config: Arc<CacheConfig>) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        worker_map: Arc<HashMap<String, String>>,
+        schema: SchemaRef,
+        num_partitions: usize,
+        config: Arc<CacheConfig>,
+    ) -> Self {
         // TODO:// revisit plan_properties
         let eq_properties = EquivalenceProperties::new_with_orderings(schema.clone(), &[]);
         let plan_properties = PlanProperties::new(
-            eq_properties,                                       // Equivalence Properties
+            eq_properties,                                     // Equivalence Properties
             Partitioning::UnknownPartitioning(num_partitions), // Output Partitioning
             EmissionType::Both,
-            Boundedness::Bounded,                             // Execution Mode
+            Boundedness::Bounded, // Execution Mode
         );
         Self {
             input,
@@ -162,14 +174,28 @@ impl ExecutionPlan for DistributedWriterExec {
     ) -> Result<SendableRecordBatchStream> {
         info!("In partition: {_partition}");
         //let addr = self.worker_map.get(&_partition.to_string()).unwrap().clone();
-        let stream = futures::stream::once(send_record_batch(self.input.clone(), _context,
-                                                             _partition, self.worker_map.clone(), self.config.clone())).try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+        let stream = futures::stream::once(send_record_batch(
+            self.input.clone(),
+            _context,
+            _partition,
+            self.worker_map.clone(),
+            self.config.clone(),
+        ))
+        .try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            stream,
+        )))
     }
 }
 
-pub async fn send_record_batch(input: Arc<dyn ExecutionPlan>, _context: Arc<TaskContext>, _partition: usize,  worker_map: Arc<HashMap<String, String>>, config: Arc<CacheConfig>) -> Result<SendableRecordBatchStream> {
-
+pub async fn send_record_batch(
+    input: Arc<dyn ExecutionPlan>,
+    _context: Arc<TaskContext>,
+    _partition: usize,
+    worker_map: Arc<HashMap<String, String>>,
+    config: Arc<CacheConfig>,
+) -> Result<SendableRecordBatchStream> {
     info!("Executing batch of partition: {_partition}");
     let mut stream = match input.execute(_partition, _context) {
         Err(e) => {
@@ -181,35 +207,53 @@ pub async fn send_record_batch(input: Arc<dyn ExecutionPlan>, _context: Arc<Task
     };
 
     while let Some(item) = stream.next().await {
-
         match item {
             Ok(rb) => {
                 info!("sending rb :{:?}", rb);
-                let worker_ids = rb.column_by_name("worker_ids").ok_or_else(|| DataFusionError::Execution("worker_ids column not found".to_string()))?;
+                let worker_ids = rb.column_by_name("worker_ids").ok_or_else(|| {
+                    DataFusionError::Execution("worker_ids column not found".to_string())
+                })?;
                 let worker_id = if let DataType::UInt64 = worker_ids.data_type() {
-                    let list_array = worker_ids.as_any().downcast_ref::<UInt64Array>().ok_or_else(|| DataFusionError::Execution("Failed to downcast to UInt64Array".to_string()))?;
+                    let list_array = worker_ids
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "Failed to downcast to UInt64Array".to_string(),
+                            )
+                        })?;
                     let values = list_array.values();
-                    values.first().ok_or_else(|| DataFusionError::Execution("No worker ID found".to_string()))?
+                    values.first().ok_or_else(|| {
+                        DataFusionError::Execution("No worker ID found".to_string())
+                    })?
                 } else {
                     return exec_err!("Expected UInt64 DataType");
                 };
                 info!("Sending batch of partition: {_partition}");
-                let addr = worker_map.get(&worker_id.to_string()).ok_or_else(|| DataFusionError::Execution(format!("Worker {} not found in worker map", worker_id)))?;
+                let addr = worker_map.get(&worker_id.to_string()).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Worker {} not found in worker map",
+                        worker_id
+                    ))
+                })?;
 
                 // Send batch with retry mechanism
                 match send_batch_with_retry(addr, rb.clone(), config.clone()).await {
                     Ok(_) => {
                         info!("Successfully sent batch to worker {}", worker_id);
-                    },
+                    }
                     Err(e) => {
                         // Change error level to warning for batch delivery failures
                         // This allows the head to keep running even if some batches fail
-                        warn!("Failed to send batch to worker {} after all retries: {}", worker_id, e);
+                        warn!(
+                            "Failed to send batch to worker {} after all retries: {}",
+                            worker_id, e
+                        );
                         // Continue processing other batches instead of failing entirely
                         continue;
                     }
                 }
-            },
+            }
             Err(error) => {
                 let err = error.to_string();
                 error!("Stopping execution: {err}");
@@ -243,7 +287,11 @@ pub async fn send_record_batch(input: Arc<dyn ExecutionPlan>, _context: Arc<Task
 /// - "Table already exists" errors are logged as INFO (worker already has data)
 /// - Permanent errors (authentication, invalid endpoints) fail immediately
 /// - All errors are logged with appropriate severity levels
-async fn send_batch_with_retry(addr: &String, record_batch: RecordBatch, config: Arc<CacheConfig>) -> Result<()> {
+async fn send_batch_with_retry(
+    addr: &String,
+    record_batch: RecordBatch,
+    config: Arc<CacheConfig>,
+) -> Result<()> {
     // Configurable retry parameters via environment variables
     let max_retries: u32 = std::env::var("ARROW_CACHE_MAX_RETRIES")
         .unwrap_or_else(|_| "3".to_string())
@@ -261,28 +309,52 @@ async fn send_batch_with_retry(addr: &String, record_batch: RecordBatch, config:
     let start_time = Instant::now();
 
     loop {
-        info!("Attempting to send batch to {} (attempt {}/{})", addr, retry_count + 1, max_retries + 1);
+        info!(
+            "Attempting to send batch to {} (attempt {}/{})",
+            addr,
+            retry_count + 1,
+            max_retries + 1
+        );
 
         match ExecutorClient::try_new(addr, config.connect_timeout).await {
             Ok(mut client) => {
                 info!("Successfully connected to worker at {}", addr);
 
-                match client.send_batch(record_batch.schema(), vec![Ok(record_batch.clone())]).await {
+                match client
+                    .send_batch(record_batch.schema(), vec![Ok(record_batch.clone())])
+                    .await
+                {
                     Ok(_) => {
                         let elapsed = start_time.elapsed();
-                        info!("Successfully sent batch to {} in {:?} (attempt {})", addr, elapsed, retry_count + 1);
+                        info!(
+                            "Successfully sent batch to {} in {:?} (attempt {})",
+                            addr,
+                            elapsed,
+                            retry_count + 1
+                        );
                         return Ok(());
-                    },
+                    }
                     Err(send_error) => {
                         // Check if this is a permanent error that shouldn't be retried
                         if is_permanent_error(&send_error) {
                             // Check specifically for memtable already exists (success case)
-                            if send_error.to_string().to_lowercase().contains("memtable already exists") {
+                            if send_error
+                                .to_string()
+                                .to_lowercase()
+                                .contains("memtable already exists")
+                            {
                                 // Worker already has data loaded, this is actually a success case
-                                info!("Worker at {} already has data loaded (memtable exists)", addr);
+                                info!(
+                                    "Worker at {} already has data loaded (memtable exists)",
+                                    addr
+                                );
                                 return Ok(());
-                            } else if send_error.to_string().to_lowercase().contains("table") &&
-                                     send_error.to_string().to_lowercase().contains("already exists") {
+                            } else if send_error.to_string().to_lowercase().contains("table")
+                                && send_error
+                                    .to_string()
+                                    .to_lowercase()
+                                    .contains("already exists")
+                            {
                                 // Generic table already exists, also a success case
                                 info!("Worker at {} already has required table", addr);
                                 return Ok(());
@@ -297,24 +369,54 @@ async fn send_batch_with_retry(addr: &String, record_batch: RecordBatch, config:
                         error!("Failed to send batch to {}: {}", addr, send_error);
 
                         if retry_count < max_retries {
-                            warn!("Send failed, will retry in {}ms (attempt {}/{})", retry_interval_ms, retry_count + 1, max_retries + 1);
+                            warn!(
+                                "Send failed, will retry in {}ms (attempt {}/{})",
+                                retry_interval_ms,
+                                retry_count + 1,
+                                max_retries + 1
+                            );
                         } else {
                             let total_elapsed = start_time.elapsed();
-                            error!("Exhausted all {} retry attempts to send batch to {} after {:?}", max_retries + 1, addr, total_elapsed);
-                            return Err(DataFusionError::Execution(format!("Failed to send batch to {} after {} retries: {}", addr, max_retries + 1, send_error)));
+                            error!(
+                                "Exhausted all {} retry attempts to send batch to {} after {:?}",
+                                max_retries + 1,
+                                addr,
+                                total_elapsed
+                            );
+                            return Err(DataFusionError::Execution(format!(
+                                "Failed to send batch to {} after {} retries: {}",
+                                addr,
+                                max_retries + 1,
+                                send_error
+                            )));
                         }
                     }
                 }
-            },
+            }
             Err(connect_error) => {
                 error!("Failed to connect to worker at {}: {}", addr, connect_error);
 
                 if retry_count < max_retries {
-                    warn!("Connection failed, will retry in {}ms (attempt {}/{})", retry_interval_ms, retry_count + 1, max_retries + 1);
+                    warn!(
+                        "Connection failed, will retry in {}ms (attempt {}/{})",
+                        retry_interval_ms,
+                        retry_count + 1,
+                        max_retries + 1
+                    );
                 } else {
                     let total_elapsed = start_time.elapsed();
-                    error!("Exhausted all {} retry attempts to connect to {} after {:?}", max_retries + 1, addr, total_elapsed);
-                    return Err(DataFusionError::Execution(format!("Failed to connect to {} after {} retries: {}", addr, max_retries + 1, connect_error)));
+                    error!(
+                        "Exhausted all {} retry attempts to connect to {} after {:?}",
+                        max_retries + 1,
+                        addr,
+                        total_elapsed
+                    );
+                    return Err(DataFusionError::Execution(format!(
+                        "Failed to connect to {} after {} retries: {}",
+                        addr,
+                        max_retries + 1,
+                        connect_error
+                    )));
                 }
             }
         }
@@ -324,7 +426,12 @@ async fn send_batch_with_retry(addr: &String, record_batch: RecordBatch, config:
             let jitter = (fastrand::f64() - 0.5) * 2.0 * JITTER_PERCENT;
             let jittered_delay = (retry_interval_ms as f64 * (1.0 + jitter)) as u64;
 
-            info!("Waiting {}ms before retry {} of {}", jittered_delay, retry_count + 1, max_retries);
+            info!(
+                "Waiting {}ms before retry {} of {}",
+                jittered_delay,
+                retry_count + 1,
+                max_retries
+            );
             sleep(Duration::from_millis(jittered_delay)).await;
 
             retry_count += 1;
@@ -334,7 +441,12 @@ async fn send_batch_with_retry(addr: &String, record_batch: RecordBatch, config:
     }
 
     let total_elapsed = start_time.elapsed();
-    Err(DataFusionError::Execution(format!("Failed to send batch to {} after {} retries and {:?}", addr, max_retries + 1, total_elapsed)))
+    Err(DataFusionError::Execution(format!(
+        "Failed to send batch to {} after {} retries and {:?}",
+        addr,
+        max_retries + 1,
+        total_elapsed
+    )))
 }
 
 /// Determines if an error is permanent and should not be retried
@@ -362,29 +474,30 @@ fn is_permanent_error(error: &DataFusionError) -> bool {
     }
 
     // Schema-related errors are usually permanent
-    if error_message.contains("schema mismatch") ||
-       error_message.contains("invalid schema") ||
-       error_message.contains("column not found") {
+    if error_message.contains("schema mismatch")
+        || error_message.contains("invalid schema")
+        || error_message.contains("column not found")
+    {
         return true;
     }
 
     // Authentication/authorization errors are permanent
-    if error_message.contains("unauthorized") ||
-       error_message.contains("permission denied") ||
-       error_message.contains("authentication failed") ||
-       error_message.contains("invalidaccesskeyid") ||
-       error_message.contains("accessdenied") ||
-       error_message.contains("signaturemismatch") ||
-       error_message.contains("tokenmismatch") ||
-       error_message.contains("the aws access key id you provided does not exist") ||
-       error_message.contains("aws access key id") ||
-       error_message.contains("s3error") {
+    if error_message.contains("unauthorized")
+        || error_message.contains("permission denied")
+        || error_message.contains("authentication failed")
+        || error_message.contains("invalidaccesskeyid")
+        || error_message.contains("accessdenied")
+        || error_message.contains("signaturemismatch")
+        || error_message.contains("tokenmismatch")
+        || error_message.contains("the aws access key id you provided does not exist")
+        || error_message.contains("aws access key id")
+        || error_message.contains("s3error")
+    {
         return true;
     }
 
     // Invalid endpoint configurations are permanent
-    if error_message.contains("invalid uri") ||
-       error_message.contains("malformed url") {
+    if error_message.contains("invalid uri") || error_message.contains("malformed url") {
         return true;
     }
 
@@ -429,27 +542,36 @@ fn is_permanent_error(error: &DataFusionError) -> bool {
 /// - [`DistributedWriterExec`]: The execution plan that uses this client
 /// - [`send_record_batch`]: Function that coordinates batch distribution
 pub struct ExecutorClient {
-     flight_client: FlightClient,
+    flight_client: FlightClient,
 }
 
 impl ExecutorClient {
     pub async fn try_new(addr: &String, connect_timeout: Duration) -> Result<Self> {
         info!("Connecting to {}", addr);
-        let connection = tonic::transport::Endpoint::new(addr.clone()).map_err(|e| DataFusionError::Execution(format!("Failed to create endpoint: {}", e)))?
-            .connect_timeout(connect_timeout).timeout(Duration::from_secs(60)) //TODO: fix timeout to not allowing closing connection
+        let connection = tonic::transport::Endpoint::new(addr.clone())
+            .map_err(|e| DataFusionError::Execution(format!("Failed to create endpoint: {}", e)))?
+            .connect_timeout(connect_timeout)
+            .timeout(Duration::from_secs(60)) //TODO: fix timeout to not allowing closing connection
             .connect()
-            .await.map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
         let flight_client = FlightClient::new(connection);
         info!("Connected to {}", addr);
 
         Ok(Self { flight_client })
     }
 
-    pub async fn send_batch(&mut self, schema: SchemaRef, record_batches: Vec<arrow_flight::error::Result<RecordBatch>>) -> Result<SendableRecordBatchStream> {
+    pub async fn send_batch(
+        &mut self,
+        schema: SchemaRef,
+        record_batches: Vec<arrow_flight::error::Result<RecordBatch>>,
+    ) -> Result<SendableRecordBatchStream> {
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .build(futures::stream::iter(record_batches.into_iter()));
-        self.flight_client.do_put(flight_data_stream)
-            .await.map_err(|e| DataFusionError::Execution(format!("Error sending batch: {e:?}")))?
+        self.flight_client
+            .do_put(flight_data_stream)
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("Error sending batch: {e:?}")))?
             .try_collect::<Vec<_>>()
             .await
             .map_err(|e| DataFusionError::Execution(format!("Error calling do_put: {}", e)))?;

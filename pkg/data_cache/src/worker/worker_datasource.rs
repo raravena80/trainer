@@ -1,31 +1,33 @@
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
-use std::future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 use arrow::array::UInt64Array;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::TableType;
+use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream};
-use iceberg::io::FileIO;
-use iceberg::table::{StaticTable, Table};
-use iceberg::TableIdent;
-use futures::{Stream, StreamExt, TryStreamExt};
-use iceberg::arrow::schema_to_arrow_schema;
-use iceberg::scan::{FileScanTask, FileScanTaskStream};
-use datafusion::error::Result;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
+};
+use futures::{Stream, StreamExt, TryStreamExt};
+use iceberg::TableIdent;
+use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::io::FileIO;
+use iceberg::scan::{FileScanTask, FileScanTaskStream};
+use iceberg::table::{StaticTable, Table};
 use iceberg_datafusion::{from_datafusion_error, to_datafusion_error};
-use tracing::{info, error};
 use object_store::aws::AmazonS3Builder;
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
+use std::future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use tracing::{error, info};
 use url::Url;
 
 /// Worker node data source for distributed Arrow caching system.
@@ -81,16 +83,32 @@ pub struct WorkerDataSource {
     start_index: u64,
     inner: Table,
     output_schema: SchemaRef,
-    table_schema: SchemaRef
+    table_schema: SchemaRef,
 }
 
 impl WorkerDataSource {
-    pub(crate) async fn new(metadata_loc: String, table_name: String, schema_name: String, file_urls: Vec<String>, start_index: u64) -> Result<Self, Box<dyn std::error::Error>> {
-        let file_io = FileIO::from_path(&metadata_loc).map_err(|e| format!("Failed to create FileIO: {}", e))?.build().map_err(|e| format!("Failed to build FileIO: {}", e))?;
-        let table_indent = TableIdent::from_strs([schema_name, table_name]).map_err(|e| format!("Failed to create table ident: {}", e))?;
-        let static_table = StaticTable::from_metadata_file(&metadata_loc, table_indent, file_io.clone()).await.map_err(|e| format!("Failed to load static table: {}", e))?;
+    pub(crate) async fn new(
+        metadata_loc: String,
+        table_name: String,
+        schema_name: String,
+        file_urls: Vec<String>,
+        start_index: u64,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let file_io = FileIO::from_path(&metadata_loc)
+            .map_err(|e| format!("Failed to create FileIO: {}", e))?
+            .build()
+            .map_err(|e| format!("Failed to build FileIO: {}", e))?;
+        let table_indent = TableIdent::from_strs([schema_name, table_name])
+            .map_err(|e| format!("Failed to create table ident: {}", e))?;
+        let static_table =
+            StaticTable::from_metadata_file(&metadata_loc, table_indent, file_io.clone())
+                .await
+                .map_err(|e| format!("Failed to load static table: {}", e))?;
         let table = static_table.into_table();
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema()).map_err(|e| format!("Failed to convert schema: {}", e))?);
+        let schema = Arc::new(
+            schema_to_arrow_schema(table.metadata().current_schema())
+                .map_err(|e| format!("Failed to convert schema: {}", e))?,
+        );
 
         let fields = schema.fields().clone();
         let mut builder = SchemaBuilder::from(&fields);
@@ -101,7 +119,7 @@ impl WorkerDataSource {
             start_index,
             inner: table,
             output_schema,
-            table_schema: schema
+            table_schema: schema,
         })
     }
 }
@@ -134,14 +152,21 @@ impl TableProvider for WorkerDataSource {
         _limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         info!("creating exec to fetch data from iceberg table");
-        let iceberg_exec = WorkerExec::new(self.file_urls.clone(), self.inner.clone(), self.table_schema.clone());
-        Ok(Arc::new(IndexColumnExec::new(Arc::new(iceberg_exec), self.output_schema.clone(), self.start_index)))
+        let iceberg_exec = WorkerExec::new(
+            self.file_urls.clone(),
+            self.inner.clone(),
+            self.table_schema.clone(),
+        );
+        Ok(Arc::new(IndexColumnExec::new(
+            Arc::new(iceberg_exec),
+            self.output_schema.clone(),
+            self.start_index,
+        )))
 
         //TODO: Support scanning with subset of datafiles
         //TODO: Support projection with selected columns - Exec init computes projected schema and add its to props. Converts to column names and passes it to exec
     }
 }
-
 
 /// Execution plan for loading assigned data files on worker nodes.
 ///
@@ -183,19 +208,19 @@ pub struct WorkerExec {
 }
 
 impl WorkerExec {
-    fn new(file_urls: Vec<String>, inner: Table, schema: SchemaRef,) -> Self {
+    fn new(file_urls: Vec<String>, inner: Table, schema: SchemaRef) -> Self {
         let eq_properties = EquivalenceProperties::new_with_orderings(schema.clone(), &[]);
         let plan_properties = PlanProperties::new(
-            eq_properties,                                       // Equivalence Properties
+            eq_properties, // Equivalence Properties
             datafusion::physical_expr::Partitioning::UnknownPartitioning(1), // Output Partitioning
             EmissionType::Both,
-            Boundedness::Bounded,                            // Execution Mode
+            Boundedness::Bounded, // Execution Mode
         );
         Self {
             file_urls,
             inner,
             schema,
-            plan_properties
+            plan_properties,
         }
     }
 }
@@ -248,10 +273,17 @@ impl ExecutionPlan for WorkerExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        info!("WorkerExec::execute called with file_urls: {:?}", self.file_urls);
-        let stream = futures::stream::once(read_stream(self.inner.clone(), self.file_urls.clone())).try_flatten();
+        info!(
+            "WorkerExec::execute called with file_urls: {:?}",
+            self.file_urls
+        );
+        let stream = futures::stream::once(read_stream(self.inner.clone(), self.file_urls.clone()))
+            .try_flatten();
         info!("WorkerExec::execute created stream, returning RecordBatchStreamAdapter");
-        Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            stream,
+        )))
     }
 }
 
@@ -300,23 +332,23 @@ pub struct IndexColumnExec {
     input: Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
     plan_properties: PlanProperties,
-    start_index: u64
+    start_index: u64,
 }
 
 impl IndexColumnExec {
     fn new(input: Arc<dyn ExecutionPlan>, schema: SchemaRef, start_index: u64) -> Self {
         let eq_properties = EquivalenceProperties::new_with_orderings(schema.clone(), &[]);
         let plan_properties = PlanProperties::new(
-            eq_properties,                                       // Equivalence Properties
+            eq_properties, // Equivalence Properties
             datafusion::physical_expr::Partitioning::UnknownPartitioning(1), // Output Partitioning
             EmissionType::Both,
-            Boundedness::Bounded,                            // Execution Mode
+            Boundedness::Bounded, // Execution Mode
         );
         Self {
             input,
             schema,
             plan_properties,
-            start_index
+            start_index,
         }
     }
 }
@@ -369,8 +401,12 @@ impl ExecutionPlan for IndexColumnExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-       let stream = self.input.execute(_partition, _context)?;
-        Ok(Box::pin(RowNumberStream::new(stream, self.schema.clone(), self.start_index)))
+        let stream = self.input.execute(_partition, _context)?;
+        Ok(Box::pin(RowNumberStream::new(
+            stream,
+            self.schema.clone(),
+            self.start_index,
+        )))
     }
 }
 
@@ -409,7 +445,7 @@ impl RowNumberStream {
         RowNumberStream {
             inner,
             row_count: start_index,
-            schema
+            schema,
         }
     }
 }
@@ -420,8 +456,7 @@ impl RecordBatchStream for RowNumberStream {
     }
 }
 
-impl Stream for RowNumberStream
-{
+impl Stream for RowNumberStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -432,20 +467,32 @@ impl Stream for RowNumberStream
                 // Debug the schemas for diagnosis
                 let input_schema = batch.schema();
                 let expected_schema = self.schema.clone();
-                info!("RowNumberStream: Input batch schema: {:?} with {} columns", input_schema, input_schema.fields().len());
-                info!("RowNumberStream: Expected output schema: {:?} with {} columns", expected_schema, expected_schema.fields().len());
+                info!(
+                    "RowNumberStream: Input batch schema: {:?} with {} columns",
+                    input_schema,
+                    input_schema.fields().len()
+                );
+                info!(
+                    "RowNumberStream: Expected output schema: {:?} with {} columns",
+                    expected_schema,
+                    expected_schema.fields().len()
+                );
 
                 // If the schemas don't match (except for the cache_index we'll add), create a new schema
                 // that combines the input columns with the cache_index column
-                let actual_schema = if input_schema.fields().len() + 1 != expected_schema.fields().len() {
-                    let mut builder = arrow_schema::SchemaBuilder::from(input_schema.fields());
-                    builder.push(Field::new("cache_index", DataType::UInt64, false));
-                    let new_schema = Arc::new(Schema::new(builder.finish().fields));
-                    info!("RowNumberStream: Created new compatible schema: {:?}", new_schema);
-                    new_schema
-                } else {
-                    expected_schema
-                };
+                let actual_schema =
+                    if input_schema.fields().len() + 1 != expected_schema.fields().len() {
+                        let mut builder = arrow_schema::SchemaBuilder::from(input_schema.fields());
+                        builder.push(Field::new("cache_index", DataType::UInt64, false));
+                        let new_schema = Arc::new(Schema::new(builder.finish().fields));
+                        info!(
+                            "RowNumberStream: Created new compatible schema: {:?}",
+                            new_schema
+                        );
+                        new_schema
+                    } else {
+                        expected_schema
+                    };
 
                 let mut new_columns = batch.columns().to_vec();
 
@@ -466,8 +513,10 @@ impl Stream for RowNumberStream
     }
 }
 
-async fn read_stream(table: Table, file_urls: Vec<String>)
-    -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>>  {
+async fn read_stream(
+    table: Table,
+    file_urls: Vec<String>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
     info!("read_stream: Starting with file_urls: {:?}", file_urls);
     let reader = table.reader_builder().build();
 
@@ -506,16 +555,27 @@ async fn read_stream(table: Table, file_urls: Vec<String>)
         }
     }
 
-    info!("read_stream: Iceberg scan completed - total_planned_files={}, matched_files={}", total_planned, matched.len());
+    info!(
+        "read_stream: Iceberg scan completed - total_planned_files={}, matched_files={}",
+        total_planned,
+        matched.len()
+    );
 
     // If Iceberg has no files or none matched, fallback to direct parquet reading
     if total_planned == 0 || matched.is_empty() {
-        info!("read_stream: Falling back to direct Parquet reading (total_planned={}, matched={})", total_planned, matched.len());
+        info!(
+            "read_stream: Falling back to direct Parquet reading (total_planned={}, matched={})",
+            total_planned,
+            matched.len()
+        );
         return read_parquet_files_directly((*file_urls_arc).clone()).await;
     }
 
     // Build a stream from matched tasks and let Iceberg reader read them
-    info!("read_stream: Building Iceberg reader stream with {} matched files", matched.len());
+    info!(
+        "read_stream: Building Iceberg reader stream with {} matched files",
+        matched.len()
+    );
     let matched_stream = futures::stream::iter(matched.into_iter().map(Ok));
     let stream = reader
         .read(Box::pin(matched_stream))
@@ -527,7 +587,8 @@ async fn read_stream(table: Table, file_urls: Vec<String>)
 }
 
 async fn filter_and_create_stream(
-    result: Result<FileScanTaskStream>, file_urls: Arc<Vec<String>>
+    result: Result<FileScanTaskStream>,
+    file_urls: Arc<Vec<String>>,
 ) -> Result<Pin<Box<dyn Stream<Item = std::result::Result<FileScanTask, iceberg::Error>> + Send>>> {
     match result {
         Ok(stream) => {
@@ -535,20 +596,26 @@ async fn filter_and_create_stream(
             Ok(Box::pin(
                 stream
                     .try_filter(move |task| {
-                        info!("Checking file task path: '{}' against URLs: {:?}", task.data_file_path, file_urls);
+                        info!(
+                            "Checking file task path: '{}' against URLs: {:?}",
+                            task.data_file_path, file_urls
+                        );
                         let matches = file_urls.clone().contains(&task.data_file_path);
                         info!("File '{}' matches: {}", task.data_file_path, matches);
                         future::ready(matches)
                     })
-                    .map(|result| result)
+                    .map(|result| result),
             ))
         }
-        Err(e) => Ok(Box::pin(futures::stream::once(future::ready(Err(from_datafusion_error(e)))))),
+        Err(e) => Ok(Box::pin(futures::stream::once(future::ready(Err(
+            from_datafusion_error(e),
+        ))))),
     }
 }
 
-async fn read_parquet_files_directly(file_urls: Vec<String>)
-    -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
+async fn read_parquet_files_directly(
+    file_urls: Vec<String>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
     info!("Reading Parquet files directly: {:?}", file_urls);
 
     use datafusion::prelude::SessionContext;
@@ -567,8 +634,10 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
             // Extract unique bucket names from all S3 URLs
             let mut buckets = std::collections::HashSet::new();
             for file_url in &file_urls {
-                if let Some(bucket) = file_url.strip_prefix("s3://")
-                    .and_then(|path| path.split('/').next()) {
+                if let Some(bucket) = file_url
+                    .strip_prefix("s3://")
+                    .and_then(|path| path.split('/').next())
+                {
                     buckets.insert(bucket);
                 }
             }
@@ -580,11 +649,13 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
                     .with_secret_access_key(&aws_secret_key)
                     .with_region(&aws_region)
                     .with_bucket_name(bucket)
-                    .build().map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+                    .build()
+                    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
                 let bucket_url = Url::parse(&format!("s3://{}/", bucket))
                     .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
-                ctx.runtime_env().register_object_store(&bucket_url, Arc::new(s3_store));
+                ctx.runtime_env()
+                    .register_object_store(&bucket_url, Arc::new(s3_store));
                 info!("Registered S3 object store for bucket: {}", bucket);
             }
         } else {
@@ -599,7 +670,9 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
         info!("Reading Parquet file: {}", file_url);
 
         // Read the Parquet file using DataFusion
-        let df = ctx.read_parquet(&file_url, Default::default()).await
+        let df = ctx
+            .read_parquet(&file_url, Default::default())
+            .await
             .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
         let batches = df.collect().await?;
@@ -609,7 +682,11 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
         if !batches.is_empty() {
             let batch_schema = batches[0].schema();
             info!("Parquet file {} schema: {:?}", file_url, batch_schema);
-            info!("Parquet file {} has {} columns", file_url, batch_schema.fields().len());
+            info!(
+                "Parquet file {} has {} columns",
+                file_url,
+                batch_schema.fields().len()
+            );
         }
 
         all_batches.extend(batches);

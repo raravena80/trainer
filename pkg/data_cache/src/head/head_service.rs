@@ -1,17 +1,21 @@
-use std::collections::HashMap;
-use arrow_flight::{flight_service_server::{FlightService}, Action, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Location, PollInfo, PutResult, SchemaResult, Ticket};
-use futures::Stream;
-use std::pin::Pin;
-use std::sync::Arc;
-use arrow_flight::flight_service_server::FlightServiceServer;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use bytes::Bytes;
-use datafusion::prelude::SessionContext;
-use tonic::{Request, Response, Status, Streaming};
-use tracing::info;
 use crate::head::head::Distributor;
 use crate::head::provider::DataFileTableProvider;
+use arrow_flight::flight_service_server::FlightServiceServer;
+use arrow_flight::{
+    Action, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
+    HandshakeRequest, HandshakeResponse, Location, PollInfo, PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService,
+};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bincode;
+use bytes::Bytes;
+use datafusion::prelude::SessionContext;
+use futures::Stream;
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
+use tonic::{Request, Response, Status, Streaming};
+use tracing::info;
 
 /// Head node service implementing Apache Arrow Flight protocol for distributed query coordination.
 ///
@@ -69,15 +73,22 @@ impl HeadService {
     }
 }
 
-
 #[tonic::async_trait]
 impl FlightService for HeadService {
-    type HandshakeStream = Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
-    async fn handshake(&self, _request: Request<Streaming<HandshakeRequest>>) -> Result<Response<Self::HandshakeStream>, Status> {
+    type HandshakeStream =
+        Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
+    async fn handshake(
+        &self,
+        _request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<Response<Self::HandshakeStream>, Status> {
         todo!()
     }
-    type ListFlightsStream = Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
-    async fn list_flights(&self, _request: Request<Criteria>) -> Result<Response<Self::ListFlightsStream>, Status> {
+    type ListFlightsStream =
+        Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
+    async fn list_flights(
+        &self,
+        _request: Request<Criteria>,
+    ) -> Result<Response<Self::ListFlightsStream>, Status> {
         todo!()
     }
     /// Provides flight information for distributed query execution.
@@ -141,35 +152,51 @@ impl FlightService for HeadService {
     /// - [`get_partition_range`]: Calculates partition boundaries
     /// - [`Distributor::get_workers_to_connect`]: Finds responsible workers
     /// - [`IndexPair`]: Row range representation in tickets
-    async fn get_flight_info(&self, request: Request<FlightDescriptor>) -> Result<Response<FlightInfo>, Status> {
+    async fn get_flight_info(
+        &self,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
         let request = request.into_inner();
-        let local_rank = request.path.first().ok_or_else(|| Status::invalid_argument("Missing local_rank in path"))?;
-        let total = request.path.get(1).ok_or_else(|| Status::invalid_argument("Missing total in path"))?;
-        let mut pair = IndexPair{ start: 0, end: 0 };
-        let total_parsed = total.parse().map_err(|_| Status::invalid_argument("Invalid total value"))?;
-        let local_rank_parsed = local_rank.parse().map_err(|_| Status::invalid_argument("Invalid local_rank value"))?;
-        let workers = if let Some((start, end)) = get_partition_range(self.distributor.total_row_count as usize, total_parsed, local_rank_parsed) { //TODO: fetch total count
-            pair = IndexPair {
-                start, end
-            };
+        let local_rank = request
+            .path
+            .first()
+            .ok_or_else(|| Status::invalid_argument("Missing local_rank in path"))?;
+        let total = request
+            .path
+            .get(1)
+            .ok_or_else(|| Status::invalid_argument("Missing total in path"))?;
+        let mut pair = IndexPair { start: 0, end: 0 };
+        let total_parsed = total
+            .parse()
+            .map_err(|_| Status::invalid_argument("Invalid total value"))?;
+        let local_rank_parsed = local_rank
+            .parse()
+            .map_err(|_| Status::invalid_argument("Invalid local_rank value"))?;
+        let workers = if let Some((start, end)) = get_partition_range(
+            self.distributor.total_row_count as usize,
+            total_parsed,
+            local_rank_parsed,
+        ) {
+            //TODO: fetch total count
+            pair = IndexPair { start, end };
             self.distributor.get_workers_to_connect(start, end).await
         } else {
             Ok(Vec::new())
         };
         let mut endpoints = vec![];
         for uri in workers.map_err(|e| Status::internal(format!("Error getting workers: {}", e)))? {
-            endpoints.push(
-                FlightEndpoint {
-                    ticket: Some(Ticket::new(Bytes::from(bincode::serialize(&pair).map_err(|e| Status::internal(format!("Serialization error: {}", e)))?))),
-                    location: vec![
-                        Location {
-                            uri
-                        },
-                    ],
-                    expiration_time: None,
-                    app_metadata: Bytes::from(bincode::serialize(&pair).map_err(|e| Status::internal(format!("Serialization error: {}", e)))?),
-                }
-            );
+            endpoints.push(FlightEndpoint {
+                ticket: Some(Ticket::new(Bytes::from(
+                    bincode::serialize(&pair)
+                        .map_err(|e| Status::internal(format!("Serialization error: {}", e)))?,
+                ))),
+                location: vec![Location { uri }],
+                expiration_time: None,
+                app_metadata: Bytes::from(
+                    bincode::serialize(&pair)
+                        .map_err(|e| Status::internal(format!("Serialization error: {}", e)))?,
+                ),
+            });
         }
 
         let flight_info = FlightInfo {
@@ -183,11 +210,14 @@ impl FlightService for HeadService {
         };
 
         let flight_info = flight_info
-            .try_with_schema(metadata_arrow_schema().as_ref()).map_err(|e| Status::internal(format!("Schema error: {}", e)))?; // TODO:// pass correct schema
+            .try_with_schema(metadata_arrow_schema().as_ref())
+            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?; // TODO:// pass correct schema
         Ok(Response::new(flight_info))
-
     }
-    async fn poll_flight_info(&self, _request: Request<FlightDescriptor>) -> Result<Response<PollInfo>, Status> {
+    async fn poll_flight_info(
+        &self,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
         todo!()
     }
     async fn get_schema(
@@ -208,31 +238,46 @@ impl FlightService for HeadService {
 
     type DoPutStream = Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
 
-    async fn do_put(&self, _request: Request<Streaming<FlightData>>) -> Result<Response<Self::DoPutStream>, Status> {
+    async fn do_put(
+        &self,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<Response<Self::DoPutStream>, Status> {
         todo!()
     }
 
-    type DoExchangeStream = Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
+    type DoExchangeStream =
+        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
 
-    async fn do_exchange(&self, _request: Request<Streaming<FlightData>>) -> Result<Response<Self::DoExchangeStream>, Status> {
+    async fn do_exchange(
+        &self,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<Response<Self::DoExchangeStream>, Status> {
         todo!()
     }
 
-    type DoActionStream = Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
+    type DoActionStream =
+        Pin<Box<dyn Stream<Item = Result<arrow_flight::Result, Status>> + Send + 'static>>;
 
-    async fn do_action(&self, _request: Request<Action>) -> Result<Response<Self::DoActionStream>, Status> {
+    async fn do_action(
+        &self,
+        _request: Request<Action>,
+    ) -> Result<Response<Self::DoActionStream>, Status> {
         todo!()
     }
 
-    type ListActionsStream = Pin<Box<dyn Stream<Item = Result<arrow_flight::ActionType, Status>> + Send + 'static>>;
+    type ListActionsStream =
+        Pin<Box<dyn Stream<Item = Result<arrow_flight::ActionType, Status>> + Send + 'static>>;
 
-    async fn list_actions(&self, _request: Request<Empty>) -> Result<Response<Self::ListActionsStream>, Status> {
+    async fn list_actions(
+        &self,
+        _request: Request<Empty>,
+    ) -> Result<Response<Self::ListActionsStream>, Status> {
         todo!()
     }
 }
 
-use serde::{Deserialize, Serialize};
 use crate::config::config::CacheConfig;
+use serde::{Deserialize, Serialize};
 
 /// Represents a row range for distributed query execution.
 ///
@@ -269,33 +314,50 @@ struct IndexPair {
     end: u64,
 }
 
-pub async fn run(host: &String, port: &String, workers: Vec<String>) -> datafusion::common::Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    host: &String,
+    port: &String,
+    workers: Vec<String>,
+) -> datafusion::common::Result<(), Box<dyn std::error::Error>> {
     let ctx = Arc::new(SessionContext::new());
     let addr = format!("{host}:{port}").parse()?;
     let num_workers = workers.len();
-    let cache_config = CacheConfig::shared_from_env().map_err(|e| format!("Failed to load dataset config: {}", e))?;
+    let cache_config = CacheConfig::shared_from_env()
+        .map_err(|e| format!("Failed to load dataset config: {}", e))?;
     let metadata_schema = metadata_arrow_schema();
-    info!("Creating DataFileTableProvider with schema: {:?}", metadata_schema);
+    info!(
+        "Creating DataFileTableProvider with schema: {:?}",
+        metadata_schema
+    );
     let provider = DataFileTableProvider::new(
         &cache_config.dataset.metadata_loc,
         &cache_config.dataset.table_name,
         &cache_config.dataset.schema_name,
         metadata_schema.clone(),
-        num_workers
-    ).await.map_err(|e| format!("Failed to create provider: {}", e))?;
+        num_workers,
+    )
+    .await
+    .map_err(|e| format!("Failed to create provider: {}", e))?;
     let mut worker_map: HashMap<String, String> = HashMap::new();
     for (index, worker_uri) in workers.into_iter().enumerate() {
         worker_map.insert(index.to_string(), format!("grpc://{worker_uri}"));
     }
-    let mut distributor = Distributor::new(ctx, num_workers, Arc::new(provider), "memtable".to_string(), Arc::new(worker_map), metadata_arrow_schema(), cache_config);
+    let mut distributor = Distributor::new(
+        ctx,
+        num_workers,
+        Arc::new(provider),
+        "memtable".to_string(),
+        Arc::new(worker_map),
+        metadata_arrow_schema(),
+        cache_config,
+    );
     let _ = distributor.init().await;
-    let service = HeadService {
-        distributor
-    };
+    let service = HeadService { distributor };
     tonic::transport::Server::builder()
         .add_service(FlightServiceServer::new(service))
         .serve(addr)
-        .await.map_err(|e| format!("Error starting server: {}", e))?;
+        .await
+        .map_err(|e| format!("Error starting server: {}", e))?;
     Ok(())
 }
 
@@ -308,7 +370,7 @@ fn metadata_arrow_schema() -> SchemaRef {
             "file_paths",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8View, true))),
             false,
-        )
+        ),
     ];
     Arc::new(Schema::new(columns))
 }
