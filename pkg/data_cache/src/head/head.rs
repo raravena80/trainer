@@ -23,7 +23,7 @@ pub struct Distributor {
     data_file_provider: Arc<DataFileTableProvider>,
     mem_table_name: String,
     worker_map: Arc<HashMap<String, String>>,
-    arrow_schema: SchemaRef,
+    metadata_schema: SchemaRef,
     pub(crate) total_row_count: i64,
     config: Arc<CacheConfig>,
     retry_task_handle: Option<tokio::task::JoinHandle<()>>,
@@ -36,7 +36,7 @@ impl Distributor {
         data_file_provider: Arc<DataFileTableProvider>,
         mem_table_name: String,
         worker_map: Arc<HashMap<String, String>>,
-        arrow_schema: SchemaRef,
+        metadata_schema: SchemaRef,
         config: Arc<CacheConfig>,
     ) -> Self {
         Self {
@@ -45,7 +45,7 @@ impl Distributor {
             data_file_provider,
             mem_table_name,
             worker_map,
-            arrow_schema,
+            metadata_schema,
             total_row_count: 0,
             config,
             retry_task_handle: None,
@@ -152,7 +152,7 @@ impl Distributor {
         let plan = DistributedWriterExec::new(
             Arc::new(plan),
             self.worker_map.clone(),
-            self.arrow_schema.clone(),
+            self.metadata_schema.clone(),
             self.num_workers,
             self.config.clone(),
         );
@@ -185,7 +185,7 @@ impl Distributor {
         let num_workers = self.num_workers;
         let mem_table_name = self.mem_table_name.clone();
         let worker_map = self.worker_map.clone();
-        let arrow_schema = self.arrow_schema.clone();
+        let metadata_schema = self.metadata_schema.clone();
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
@@ -202,7 +202,7 @@ impl Distributor {
                     num_workers,
                     &mem_table_name,
                     worker_map.clone(),
-                    arrow_schema.clone(),
+                    metadata_schema.clone(),
                     config.clone(),
                 )
                 .await
@@ -226,7 +226,7 @@ impl Distributor {
         num_workers: usize,
         mem_table_name: &str,
         worker_map: Arc<HashMap<String, String>>,
-        arrow_schema: SchemaRef,
+        metadata_schema: SchemaRef,
         config: Arc<CacheConfig>,
     ) -> Result<()> {
         let table = ctx
@@ -241,7 +241,7 @@ impl Distributor {
         let plan = DistributedWriterExec::new(
             Arc::new(plan),
             worker_map,
-            arrow_schema,
+            metadata_schema,
             num_workers,
             config,
         );

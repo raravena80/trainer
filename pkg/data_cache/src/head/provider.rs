@@ -76,12 +76,12 @@ impl DataFileTableProvider {
         metadata_loc: &String,
         table_name: &String,
         schema_name: &String,
-        arrow_schema: SchemaRef,
+        metadata_schema: SchemaRef,
         num_workers: usize,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         info!(
-            "DataFileTableProvider::new called with arrow_schema: {:?}",
-            arrow_schema
+            "DataFileTableProvider::new called with metadata_schema: {:?}",
+            metadata_schema
         );
         let file_io = FileIO::from_path(metadata_loc)
             .map_err(|e| format!("Failed to create FileIO: {}", e))?
@@ -97,7 +97,7 @@ impl DataFileTableProvider {
         // Use the provided metadata schema instead of Iceberg table schema
         let provider = Self {
             inner: table,
-            schema: arrow_schema.clone(), // This should be the metadata schema (worker_ids, row_start_indexes, etc.)
+            schema: metadata_schema.clone(), // This should be the metadata schema (worker_ids, row_start_indexes, etc.)
             num_workers,
         };
         info!(

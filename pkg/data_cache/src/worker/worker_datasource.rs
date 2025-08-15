@@ -13,7 +13,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use futures::{future, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, future};
 use iceberg::TableIdent;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::io::FileIO;
@@ -29,59 +29,150 @@ use std::task::{Context, Poll};
 use tracing::{error, info};
 use url::Url;
 
-/// Worker node data source for distributed Arrow caching system.
+/// Worker node data source that manages **data schemas** for distributed Arrow caching.
 ///
-/// This table provider implements the worker node functionality in a distributed
-/// Arrow-based caching system. It loads specific data files assigned by the head
-/// node and adds cache indexing to enable efficient data retrieval.
+/// **IMPORTANT**: This component handles the **data schema** (actual data structure)
+/// which is completely separate from the **metadata schema** used by the head node
+/// for coordination. See [`metadata_arrow_schema()`] for head node coordination schema.
+///
+/// # Dual Schema Architecture - Worker Data Processing
+///
+/// This worker data source manages **two distinct Arrow schemas** for data processing:
+///
+/// 1. **`table_schema`** - Original data schema from Iceberg:
+///    - Source: Iceberg table metadata converted to Arrow format
+///    - Conversion: `iceberg::arrow::schema_to_arrow_schema(table.metadata().current_schema())`
+///    - Purpose: Represents the raw data structure for reading files
+///    - Example: `[id: Int64, user_id: String, event_type: String, timestamp: Timestamp]`
+///
+/// 2. **`output_schema`** - Enhanced data schema for caching:
+///    - Source: `table_schema` + additional `cache_index` column
+///    - Purpose: Provides global row ordering across distributed workers
+///    - Example: `[id: Int64, user_id: String, event_type: String, timestamp: Timestamp, cache_index: UInt64]`
+///
+/// # Schema vs Metadata Schema Separation
+///
+/// **Worker Data Schemas** (this component):
+/// - Describe actual data structure (columns, types, semantics)
+/// - Converted from Iceberg metadata to Arrow format
+/// - Enhanced with caching columns for efficient lookups
+/// - Used for query execution and data processing
+///
+/// **Head Node Metadata Schema** (coordination only):
+/// - Describes worker coordination (worker_ids, row ranges, file paths)
+/// - Created by [`metadata_arrow_schema()`] function
+/// - No relationship to actual data structure
+/// - Used for distributed query planning and coordination
 ///
 /// # Architecture
 ///
 /// The worker data source operates as part of a head-worker architecture:
-/// - Head node assigns specific file URLs to this worker
-/// - Worker loads only the assigned data files from Iceberg tables
+/// - Head node assigns specific file URLs using metadata schema
+/// - Worker loads assigned data files using data schemas (this component)
 /// - Adds a `cache_index` column for global row ordering
 /// - Supports streaming data processing with bounded memory usage
 ///
-/// # Data Flow
+/// # Data Schema Conversion Flow
+///
+/// ```text
+/// Iceberg Table Metadata
+///    │ (contains original data schema)
+///    ▼
+/// iceberg::arrow::schema_to_arrow_schema()
+///    │
+///    ▼
+/// table_schema: SchemaRef
+///    │ (e.g., [id, user_id, event_type, timestamp])
+///    ▼
+/// + cache_index column
+///    │
+///    ▼
+/// output_schema: SchemaRef
+///    │ (e.g., [id, user_id, event_type, timestamp, cache_index])
+///    ▼
+/// Used for query execution
+/// ```
+///
+/// # Data Flow with Schema Usage
 ///
 /// ```text
 /// ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 /// │   Head Node     │───▶│ WorkerDataSource│───▶│   IndexColumn   │
-/// │ (assigns files) │    │                 │    │      Exec       │
+/// │(metadata schema)│    │ (data schemas)  │    │      Exec       │
 /// └─────────────────┘    └─────────────────┘    └─────────────────┘
 ///                                 │                       │
 ///                                 ▼                       ▼
 ///                        ┌─────────────────┐    ┌─────────────────┐
 ///                        │   WorkerExec    │    │  Row Numbering  │
-///                        │ (loads files)   │    │   (cache_index) │
+///                        │(table_schema)   │    │(output_schema)  │
 ///                        └─────────────────┘    └─────────────────┘
 /// ```
 ///
-/// # Schema Enhancement
+/// # Example Data Schema Evolution
 ///
-/// The worker adds a `cache_index` column to the original table schema:
-/// - Original columns remain unchanged
-/// - `cache_index` provides global row ordering across all workers
-/// - Starting index is provided by the head node for consistent numbering
+/// **Original Iceberg Schema**:
+/// ```text
+/// ┌────────┬─────────┬────────────┬─────────────┐
+/// │   id   │ user_id │ event_type │ timestamp   │
+/// │ Int64  │ String  │   String   │ Timestamp   │
+/// └────────┴─────────┴────────────┴─────────────┘
+/// ```
+///
+/// **table_schema** (converted to Arrow):
+/// ```text
+/// ┌────────┬─────────┬────────────┬─────────────┐
+/// │   id   │ user_id │ event_type │ timestamp   │
+/// │ Int64  │ String  │   String   │ Timestamp   │
+/// └────────┴─────────┴────────────┴─────────────┘
+/// ```
+///
+/// **output_schema** (enhanced for caching):
+/// ```text
+/// ┌────────┬─────────┬────────────┬─────────────┬─────────────┐
+/// │   id   │ user_id │ event_type │ timestamp   │ cache_index │
+/// │ Int64  │ String  │   String   │ Timestamp   │   UInt64    │
+/// └────────┴─────────┴────────────┴─────────────┴─────────────┘
+/// ```
 ///
 /// # Performance Considerations
 ///
 /// - Only loads files assigned to this worker (reduces I/O)
 /// - Streams data to minimize memory footprint
-/// - Maintains global row ordering for distributed queries
+/// - `cache_index` enables efficient range-based queries
 /// - Uses Iceberg's native file filtering capabilities
+/// - Schema conversion happens once during initialization
 ///
 /// # See Also
 ///
-/// - [`WorkerExec`]: Execution plan for loading assigned data files
-/// - [`IndexColumnExec`]: Execution plan for adding cache index column
-/// - [`RowNumberStream`]: Stream processor for row numbering
+/// ## Data Schema Components:
+/// - [`WorkerExec`]: Execution plan for loading data using table_schema
+/// - [`IndexColumnExec`]: Execution plan for adding cache_index using output_schema
+/// - [`RowNumberStream`]: Stream processor for row numbering with output_schema
+/// - [`iceberg::arrow::schema_to_arrow_schema`]: Converts Iceberg schema to Arrow
+///
+/// ## Metadata Schema (Head Node Coordination):
+/// - [`metadata_arrow_schema()`]: Creates coordination schema (separate from data)
+/// - [`HeadService`]: Uses metadata schema for worker coordination
 pub struct WorkerDataSource {
     file_urls: Vec<String>,
     start_index: u64,
     inner: Table,
+    /// **Enhanced data schema** for query execution and caching operations.
+    ///
+    /// This schema includes:
+    /// - All original data columns from the Iceberg table
+    /// - Additional `cache_index` column (UInt64) for efficient indexing
+    ///
+    /// Used by query execution plans and result generation.
+    /// Example: `[id: Int64, user_id: String, event_type: String, timestamp: Timestamp, cache_index: UInt64]`
     output_schema: SchemaRef,
+    /// **Original data schema** converted from Iceberg table metadata to Arrow format.
+    ///
+    /// This represents the raw data structure as defined in the Iceberg table,
+    /// without any caching enhancements. Used for reading and processing data files.
+    ///
+    /// Converted using: `iceberg::arrow::schema_to_arrow_schema(table.metadata().current_schema())`
+    /// Example: `[id: Int64, user_id: String, event_type: String, timestamp: Timestamp]`
     table_schema: SchemaRef,
 }
 
@@ -104,11 +195,16 @@ impl WorkerDataSource {
                 .await
                 .map_err(|e| format!("Failed to load static table: {}", e))?;
         let table = static_table.into_table();
+
+        // STEP 1: Convert Iceberg data schema to Arrow format
+        // This creates the table_schema containing the original data columns
         let schema = Arc::new(
             schema_to_arrow_schema(table.metadata().current_schema())
                 .map_err(|e| format!("Failed to convert schema: {}", e))?,
         );
 
+        // STEP 2: Create enhanced schema by adding cache_index column
+        // This creates the output_schema used for query execution and caching
         let fields = schema.fields().clone();
         let mut builder = SchemaBuilder::from(&fields);
         builder.push(Field::new("cache_index", DataType::UInt64, false)); // TODO:// validate name collision

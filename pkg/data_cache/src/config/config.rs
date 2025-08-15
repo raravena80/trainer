@@ -2,11 +2,23 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Configuration for dataset metadata and table information
+/// Configuration for dataset metadata and table information.
+///
+/// **Important**: The `schema_name` here refers to the **Iceberg schema namespace**,
+/// not Arrow schemas. The distributed caching system uses two separate Arrow schemas:
+///
+/// 1. **Metadata Schema**: Created by head node for worker coordination
+/// 2. **Data Schema**: Converted from Iceberg schema by worker nodes
+///
+/// This config provides the Iceberg table coordinates that workers use to
+/// retrieve the original data schema and convert it to Arrow format.
 #[derive(Debug, Clone)]
 pub struct DatasetConfig {
+    /// Location of Iceberg table metadata (e.g., S3 path to metadata.json)
     pub metadata_loc: String,
+    /// Iceberg schema namespace (NOT Arrow schema - used for table identification)
     pub schema_name: String,
+    /// Iceberg table name within the schema namespace
     pub table_name: String,
 }
 

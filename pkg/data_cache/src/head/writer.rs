@@ -95,7 +95,7 @@ use tracing::{error, info, warn};
 pub struct DistributedWriterExec {
     input: Arc<dyn ExecutionPlan>,
     worker_map: Arc<HashMap<String, String>>,
-    schema: SchemaRef,
+    metadata_schema: SchemaRef,
     plan_properties: PlanProperties,
     config: Arc<CacheConfig>,
 }
@@ -121,12 +121,12 @@ impl DistributedWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         worker_map: Arc<HashMap<String, String>>,
-        schema: SchemaRef,
+        metadata_schema: SchemaRef,
         num_partitions: usize,
         config: Arc<CacheConfig>,
     ) -> Self {
         // TODO:// revisit plan_properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema.clone(), &[]);
+        let eq_properties = EquivalenceProperties::new_with_orderings(metadata_schema.clone(), &[]);
         let plan_properties = PlanProperties::new(
             eq_properties,                                     // Equivalence Properties
             Partitioning::UnknownPartitioning(num_partitions), // Output Partitioning
@@ -136,7 +136,7 @@ impl DistributedWriterExec {
         Self {
             input,
             worker_map,
-            schema,
+            metadata_schema,
             plan_properties,
             config,
         }
@@ -183,7 +183,7 @@ impl ExecutionPlan for DistributedWriterExec {
         ))
         .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            self.metadata_schema.clone(),
             stream,
         )))
     }

@@ -18,50 +18,104 @@ use tracing::info;
 
 /// Head node service implementing Apache Arrow Flight protocol for distributed query coordination.
 ///
-/// This service provides the head node functionality in the distributed Arrow
-/// caching system. It coordinates query execution across multiple worker nodes
-/// and provides flight information for distributed data access.
+/// **IMPORTANT**: This service handles **coordination metadata** only and does NOT
+/// deal with actual data schemas. The head node uses a **metadata schema** for
+/// worker coordination, while workers separately manage **data schemas** for
+/// actual data processing.
+///
+/// # Dual Schema Architecture - Head Node Coordination
+///
+/// The distributed caching system uses **two completely separate Arrow schemas**:
+///
+/// ## 1. **Metadata Schema** (Head Node - This Service):
+/// - **Purpose**: Coordinate worker assignments and data distribution
+/// - **Created by**: [`metadata_arrow_schema()`] function
+/// - **Contains**: `worker_ids`, `row_start_indexes`, `row_end_indexes`, `file_paths`
+/// - **Used for**: Flight protocol coordination, worker task distribution
+/// - **Location**: Head node only (this service)
+///
+/// ## 2. **Data Schema** (Worker Nodes):
+/// - **Purpose**: Describe actual data structure being cached/queried
+/// - **Created by**: Converting Iceberg schema to Arrow in [`WorkerDataSource`]
+/// - **Contains**: Actual data columns (e.g., `id`, `user_id`, `event_type`, `timestamp`)
+/// - **Used for**: Query execution, data processing, result generation
+/// - **Location**: Worker nodes only
+///
+/// # Schema Separation Benefits
+///
+/// - **Modularity**: Head nodes don't need to understand data semantics
+/// - **Performance**: Lightweight coordination without full data schema overhead
+/// - **Evolution**: Data schemas can change independently of coordination logic
+/// - **Scalability**: Head node coordination scales independently of data complexity
 ///
 /// # Architecture
 ///
 /// The head service operates as the coordinator in a head-worker distributed system:
 /// - Receives flight information requests from clients
-/// - Partitions data ranges across available worker nodes
+/// - Partitions data ranges across available worker nodes using **metadata schema**
 /// - Distributes file assignments to worker nodes
 /// - Provides flight endpoints for distributed query execution
+/// - **Never handles actual data** - only coordination metadata
 ///
 /// # Flight Protocol Usage
 ///
-/// - **`get_flight_info`**: Provides flight information with worker endpoints
+/// - **`get_flight_info`**: Provides flight information with worker endpoints (uses metadata schema)
 /// - Other Flight methods are not currently implemented
 ///
-/// # Data Flow
+/// # Coordination Data Flow
 ///
 /// ```text
 /// ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 /// │   Client        │───▶│   HeadService   │───▶│   Distributor   │
-/// │(get_flight_info)│    │  (FlightService)│    │ (partitioning)  │
+/// │(get_flight_info)│    │(metadata schema)│    │(metadata schema)│
 /// └─────────────────┘    └─────────────────┘    └─────────────────┘
 ///                                 │                       │
 ///                                 ▼                       ▼
 ///                        ┌─────────────────┐    ┌─────────────────┐
 ///                        │ Flight Endpoints│    │ Worker Nodes    │
-///                        │   (workers)     │    │   (data files)  │
+///                        │(metadata schema)│    │ (data schemas)  │
 ///                        └─────────────────┘    └─────────────────┘
+/// ```
+///
+/// # Example Coordination vs Data
+///
+/// **Head Node Metadata** (coordination only):
+/// ```text
+/// ┌────────────┬─────────────────┬───────────────┬─────────────────────────┐
+/// │ worker_ids │ row_start_index │ row_end_index │ file_paths              │
+/// ├────────────┼─────────────────┼───────────────┼─────────────────────────┤
+/// │ 0          │ 0               │ 999           │ ["/data/part1.parquet"] │
+/// │ 1          │ 1000            │ 1999          │ ["/data/part2.parquet"] │
+/// └────────────┴─────────────────┴───────────────┴─────────────────────────┘
+/// ```
+///
+/// **Worker Node Data** (actual data structure):
+/// ```text
+/// ┌────────┬─────────┬────────────┬─────────────┬─────────────┐
+/// │   id   │ user_id │ event_type │ timestamp   │ cache_index │
+/// │ Int64  │ String  │   String   │ Timestamp   │   UInt64    │
+/// └────────┴─────────┴────────────┴─────────────┴─────────────┘
 /// ```
 ///
 /// # Performance Considerations
 ///
-/// - Partitions data to balance load across workers
-/// - Uses efficient serialization for flight metadata
+/// - Partitions data to balance load across workers (using metadata schema)
+/// - Uses efficient serialization for flight coordination metadata
 /// - Maintains worker topology for optimal data distribution
-/// - Supports dynamic worker scaling
+/// - Supports dynamic worker scaling without data schema dependencies
+/// - Lightweight coordination operations independent of data complexity
 ///
 /// # See Also
 ///
+/// ## Head Node Coordination (Metadata Schema):
 /// - [`Distributor`]: Handles data distribution and worker coordination
 /// - [`get_partition_range`]: Calculates data partitioning ranges
 /// - [`IndexPair`]: Represents row ranges in flight tickets
+/// - [`metadata_arrow_schema()`]: Creates the coordination metadata schema
+///
+/// ## Worker Node Data Processing (Data Schema):
+/// - [`WorkerDataSource`]: Manages data schemas for actual data processing
+/// - [`WorkerService`]: Handles data queries using data schemas
 pub struct HeadService {
     distributor: Distributor,
 }
@@ -361,6 +415,109 @@ pub async fn run(
     Ok(())
 }
 
+/// Creates the Arrow schema for **coordination metadata** in the distributed caching system.
+///
+/// **IMPORTANT**: This function creates the **metadata schema** used for coordination
+/// between the head node and worker nodes. This is **NOT** the data schema that describes
+/// the actual data being processed. The data schema is handled separately by worker nodes
+/// and is converted from Iceberg format to Arrow format in [`WorkerDataSource`].
+///
+/// # Dual Schema Architecture
+///
+/// The distributed caching system uses **two distinct Arrow schemas**:
+///
+/// 1. **Metadata Schema** (this function):
+///    - Used by head node for worker coordination
+///    - Contains worker assignments and file distribution information
+///    - Transmitted via Arrow Flight for system coordination
+///
+/// 2. **Data Schema** (in workers):
+///    - Describes the structure of actual data being cached/queried
+///    - Converted from Iceberg table metadata to Arrow format
+///    - Enhanced with `cache_index` column for efficient indexing
+///    - See [`WorkerDataSource::table_schema`] and [`WorkerDataSource::output_schema`]
+///
+/// # Metadata Schema Fields
+///
+/// The coordination metadata schema contains four essential fields:
+///
+/// - **`worker_ids`** (`UInt64`, non-nullable): Unique identifiers for worker nodes
+///   responsible for processing specific data ranges. Used for routing queries
+///   to the appropriate workers.
+///
+/// - **`row_start_indexes`** (`UInt64`, non-nullable): Starting row indices for
+///   data ranges assigned to each worker. Defines the beginning of each worker's
+///   data partition (inclusive).
+///
+/// - **`row_end_indexes`** (`UInt64`, non-nullable): Ending row indices for
+///   data ranges assigned to each worker. Defines the end of each worker's
+///   data partition (inclusive).
+///
+/// - **`file_paths`** (`List<Utf8View>`, non-nullable): List of file paths
+///   that each worker is responsible for processing. Supports multiple files
+///   per worker for efficient data distribution.
+///
+/// # Returns
+///
+/// Returns an [`SchemaRef`] (reference-counted Arrow schema) that can be:
+/// - Used in flight information responses for coordination
+/// - Shared across multiple head node components without cloning
+/// - Passed to DataFusion table providers for metadata operations
+/// - Serialized in Apache Arrow Flight protocol messages
+///
+/// # Usage in Distributed System
+///
+/// This **metadata schema** is used throughout the head node coordination layer:
+/// 1. **Flight Information**: Attached to flight responses for schema validation
+/// 2. **Worker Communication**: Defines the structure of coordination exchanges
+/// 3. **Query Planning**: Used by DataFusion for distribution planning
+/// 4. **Data Distribution**: Describes how data is partitioned across workers
+///
+/// # Example Coordination Metadata Structure
+///
+/// ```text
+/// ┌────────────┬─────────────────┬───────────────┬─────────────────────────┐
+/// │ worker_ids │ row_start_index │ row_end_index │ file_paths              │
+/// ├────────────┼─────────────────┼───────────────┼─────────────────────────┤
+/// │ 0          │ 0               │ 999           │ ["/data/part1.parquet"] │
+/// │ 1          │ 1000            │ 1999          │ ["/data/part2.parquet"] │
+/// │ 2          │ 2000            │ 2999          │ ["/data/part3.parquet"] │
+/// └────────────┴─────────────────┴───────────────┴─────────────────────────┘
+/// ```
+///
+/// # Schema Separation Rationale
+///
+/// **Why separate metadata and data schemas?**
+/// - **Separation of Concerns**: Coordination logic is independent of data structure
+/// - **Schema Evolution**: Data schema can evolve without affecting coordination
+/// - **Performance**: Lightweight metadata operations don't need full data schema
+/// - **Modularity**: Head nodes don't need to understand data semantics
+///
+/// # Schema Compatibility
+///
+/// - Uses `UInt64` for row indices to support large datasets (up to 2^64 rows)
+/// - Uses `Utf8View` for efficient string storage and reduced memory footprint
+/// - Non-nullable fields ensure data integrity across the distributed system
+/// - List type supports variable numbers of files per worker
+///
+/// # Performance Considerations
+///
+/// - Schema is created once and reused via `Arc<Schema>` for efficiency
+/// - `Utf8View` provides zero-copy string operations for file paths
+/// - Minimal schema overhead for coordination communication
+/// - Compatible with Arrow's columnar format for fast serialization
+///
+/// # See Also
+///
+/// ## Metadata Schema Usage:
+/// - [`DataFileTableProvider`]: Uses this schema for coordination table registration
+/// - [`get_flight_info`]: Attaches this schema to flight responses
+/// - [`Distributor`]: Uses this schema for metadata operations
+///
+/// ## Data Schema Usage (Worker Side):
+/// - [`WorkerDataSource::table_schema`]: Original data schema from Iceberg → Arrow
+/// - [`WorkerDataSource::output_schema`]: Data schema + cache_index column
+/// - [`iceberg::arrow::schema_to_arrow_schema`]: Converts Iceberg schema to Arrow
 fn metadata_arrow_schema() -> SchemaRef {
     let columns = vec![
         Field::new("worker_ids", DataType::UInt64, false),
