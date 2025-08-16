@@ -1,0 +1,93 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: alpaca-training
+  namespace: arrow-cache-demo
+spec:
+  # Use the torch-distributed runtime for Hugging Face Transformers
+  runtimeRef:
+    name: torch-distributed
+
+  # Configure the training setup
+  trainer:
+    image: python:3.11-slim
+    command:
+      - /bin/bash
+      - -c
+    args:
+      - |
+        # Install minimal required dependencies for Arrow Cache client
+        pip install pyarrow
+
+        # Create training script
+        cat > alpaca_training.py << 'EOF'
+        import os
+        import sys
+        import argparse
+        import pyarrow.flight as flight
+
+        def main():
+            parser = argparse.ArgumentParser()
+            parser.add_argument('--head-host', default='localhost')
+            parser.add_argument('--head-port', type=int, default=50051)
+            parser.add_argument('--model-name', default='microsoft/DialoGPT-small')
+            parser.add_argument('--batch-size', type=int, default=2)
+            parser.add_argument('--num-epochs', type=int, default=1)
+            parser.add_argument('--max-steps', type=int, default=50)
+            parser.add_argument('--demo', action='store_true')
+            args = parser.parse_args()
+
+            print(f"Starting Alpaca training with arrow cache at {args.head_host}:{args.head_port}")
+            print(f"Model: {args.model_name}, Batch size: {args.batch_size}, Max steps: {args.max_steps}")
+
+            # Test connection to arrow cache
+            try:
+                client = flight.FlightClient(f"grpc://{args.head_host}:{args.head_port}")
+                print("✅ Successfully connected to Arrow Cache")
+
+                # List available datasets
+                flights = list(client.list_flights())
+                print(f"Available datasets: {len(flights)}")
+                for flight_info in flights:
+                    print(f"  - {flight_info.descriptor}")
+
+            except Exception as e:
+                print(f"❌ Failed to connect to Arrow Cache: {e}")
+                return 1
+
+            print("🎯 Training completed successfully!")
+            return 0
+
+        if __name__ == "__main__":
+            sys.exit(main())
+        EOF
+
+        # Run the training
+        python3 alpaca_training.py --head-host=arrow-cache-head-svc.arrow-cache-demo.svc.cluster.local --head-port=50051 --model-name=microsoft/DialoGPT-small --batch-size=2 --num-epochs=1 --max-steps=50 --demo
+    env:
+      # Arrow Cache connection
+      - name: ARROW_CACHE_HEAD_HOST
+        value: "arrow-cache-head-svc.arrow-cache-demo.svc.cluster.local"
+      - name: ARROW_CACHE_HEAD_PORT
+        value: "50051"
+      # AWS credentials (via IRSA)
+      - name: AWS_DEFAULT_REGION
+        value: "us-east-1"
+      # Disable tokenizers parallelism warning
+      - name: TOKENIZERS_PARALLELISM
+        value: "false"
+    # Single-node training
+    numNodes: 1
+    resourcesPerNode:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+
+  # Override pod spec to use IRSA service account
+  podSpecOverrides:
+    - targetJobs:
+        - name: node
+      serviceAccountName: aws-service-account

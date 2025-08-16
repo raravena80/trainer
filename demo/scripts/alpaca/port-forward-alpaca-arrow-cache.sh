@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# Port Forward IMDB Arrow Cache Demo Services
+# Port Forward Alpaca Arrow Cache Demo Services
 # This script sets up port forwarding to access the Arrow Cache services locally
 
-echo "🔌 Setting up port forwarding for IMDB Arrow Cache..."
+echo "🔌 Setting up port forwarding for Alpaca Arrow Cache..."
 
 # Check if kubectl is available
 if ! command -v kubectl &> /dev/null; then
@@ -13,25 +13,25 @@ if ! command -v kubectl &> /dev/null; then
 fi
 
 # Check if the namespace exists
-if ! kubectl get namespace arrow-cache-imdb &> /dev/null; then
-    echo "❌ Namespace arrow-cache-imdb doesn't exist"
+if ! kubectl get namespace arrow-cache-demo &> /dev/null; then
+    echo "❌ Namespace arrow-cache-demo doesn't exist"
     echo "Please deploy the demo first:"
-    echo "  ./demo/scripts/imdb/setup-imdb-arrow-cache.sh"
+    echo "  ./deploy-alpaca-cache.sh"
     exit 1
 fi
 
 # Check if pods are ready
 echo "🔍 Checking pod status..."
-if ! kubectl get pods -n arrow-cache-imdb | grep -q "Running"; then
-    echo "❌ No running pods found in arrow-cache-imdb namespace"
+if ! kubectl get pods -n arrow-cache-demo | grep -q "Running"; then
+    echo "❌ No running pods found in arrow-cache-demo namespace"
     echo "Please make sure the demo is deployed and pods are ready:"
-    echo "  kubectl get pods -n arrow-cache-imdb"
+    echo "  kubectl get pods -n arrow-cache-demo"
     exit 1
 fi
 
 # Kill any existing port-forward processes
 echo "🔌 Stopping existing port-forward processes..."
-pkill -f "kubectl port-forward.*arrow-cache-imdb" || true
+pkill -f "kubectl port-forward.*arrow-cache-demo" || true
 sleep 2
 
 # Function to start port forwarding in background
@@ -42,7 +42,7 @@ start_port_forward() {
     local service_name=$4
 
     echo "🚀 Starting port forward: $service_name (localhost:$local_port -> $resource:$remote_port)"
-    kubectl port-forward -n arrow-cache-imdb "$resource" "$local_port:$remote_port" &
+    kubectl port-forward -n arrow-cache-demo "$resource" "$local_port:$remote_port" &
     local pid=$!
     echo "  PID: $pid"
 
@@ -87,15 +87,16 @@ echo "  Head Service:  localhost:50051 -> arrow-cache-head-svc:50051"
 echo "  Worker-0:      localhost:50052 -> arrow-cache-worker-0:50051"
 echo "  Worker-1:      localhost:50053 -> arrow-cache-worker-1:50051"
 echo ""
-echo "🎯 Now you can run the demo client:"
-echo "  python3 demo/scripts/imdb/demo-client.py --demo"
+echo "🎯 Now you can run the training script:"
+echo "  python3 alpaca_training.py --use-arrow-cache --dry-run  # Test first"
+echo "  python3 alpaca_training.py --use-arrow-cache            # Real training"
 echo ""
 echo "📊 Monitor logs with:"
-echo "  kubectl logs -f -n arrow-cache-imdb deployment/arrow-cache-head"
-echo "  kubectl logs -f -n arrow-cache-imdb statefulset/arrow-cache-worker"
+echo "  kubectl logs -f -n arrow-cache-demo deployment/arrow-cache-head"
+echo "  kubectl logs -f -n arrow-cache-demo statefulset/arrow-cache-worker"
 echo ""
 echo "⚡ To stop port forwarding, press Ctrl+C or run:"
-echo "  pkill -f 'kubectl port-forward.*arrow-cache-imdb'"
+echo "  pkill -f 'kubectl port-forward.*arrow-cache-demo'"
 
 # Wait for user to interrupt
 echo ""

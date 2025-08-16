@@ -1,0 +1,47 @@
+dataset_name: "imdb"
+description: "IMDB movie review sentiment classification dataset"
+
+# Arrow Cache configuration
+namespace: "arrow-cache-imdb"
+num_partitions: 4
+
+# Iceberg configuration
+iceberg_catalog:
+  name: "glue"
+  warehouse: "s3://ricardo.hf.datasets/iceberg-warehouse"
+  region_name: "us-east-1"
+iceberg_table: "hf_datasets.imdb"
+
+# Data schema
+text_column: "text"  # Main column for training
+columns:
+  - name: "text"
+    type: "string"
+    description: "Movie review text"
+  - name: "label"
+    type: "integer"
+    description: "Sentiment label (0=negative, 1=positive)"
+
+# Training defaults
+default_model: "distilgpt2"
+default_max_length: 256
+default_batch_size: 2
+default_epochs: 1
+default_learning_rate: 5e-5
+seed: 42
+
+# AWS resources
+checkpoint_bucket: "ricardo.hf.datasets"
+checkpoint_prefix: "imdb_models"
+glue_database: "hf_datasets"
+
+# Dataset statistics
+total_samples: 50000
+sample_format: "sentiment_classification"
+dataset_source: "https://huggingface.co/datasets/imdb"
+
+# Example usage
+example_text: |
+  This movie was absolutely fantastic! The plot was engaging, the characters were well-developed,
+  and the cinematography was breathtaking. I would definitely recommend this to anyone looking
+  for a great film experience.

@@ -1,84 +1,100 @@
-# IMDB Arrow Cache Demo
+# IMDB Movie Review Sentiment Training with Arrow Cache
 
-This directory contains the IMDB movie review demo using real data from an Apache Iceberg table.
+This directory contains scripts for training sentiment classification models on the IMDB movie review dataset using Arrow Cache for distributed data access.
 
-## Quick Start
+## 📁 Files Overview
+
+- **`imdb_training.py`** - Main training script for IMDB sentiment classification
+- **`imdb-trainjob-real.yaml`** - Production TrainJob for actual training
+- **`imdb-trainjob-simple.yaml`** - Simple TrainJob for testing script loading
+- **`imdb-configmap.yaml`** - Basic ConfigMap template
+- **`imdb-training-configmap.yaml`** - Complete ConfigMap with all scripts
+- **`demo-client.py`** - Demo client for testing Arrow Cache connectivity
+- **`README.md`** - This documentation
+
+## 🎬 Dataset Information
+
+**IMDB Movie Review Dataset:**
+- **Total Samples**: ~50,000 movie reviews
+- **Task**: Binary sentiment classification (positive/negative)
+- **Schema**:
+  - `text` - Movie review text
+  - `label` - Sentiment label (0=negative, 1=positive)
+- **Source**: [IMDB Movie Reviews](https://huggingface.co/datasets/imdb)
+
+## 🚀 Quick Start
+
+### 1. Deploy IMDB Arrow Cache System
+
+First, set up the Arrow Cache infrastructure for IMDB:
 
 ```bash
-# Deploy the IMDB demo
-./deploy-imdb-arrow-cache.sh
+# From the setup-kind directory
+./irsa/arrow-cache-example.sh --demo-type imdb
 
-# Set up port forwarding (in another terminal)
-./port-forward-imdb-arrow-cache.sh
+# Or manually
+../setup-imdb-arrow-cache.sh --iam-role arn:aws:iam::123456789:role/YourRole
+```
 
-# Run the demo
+### 2. Test Arrow Cache Connection
+
+```bash
+# Test basic connectivity
 python3 demo-client.py --demo
 
-# Run performance test
-python3 demo-client.py --perf-test --queries 10
+# Run sentiment analysis demo
+python3 demo-client.py --sentiment
 
-# Clean up
-./cleanup-imdb-arrow-cache.sh
+# Performance testing
+python3 demo-client.py --performance --queries 20
 ```
 
-## Files
+### 3. Run Training
 
-- `demo-client.py` - IMDB demo client using shared library
-- `demo-imdb-arrow-cache-client.py` - Original standalone client (legacy)
-- `deploy-imdb-arrow-cache.sh` - Deploy IMDB demo to Kubernetes
-- `port-forward-imdb-arrow-cache.sh` - Set up port forwarding
-- `cleanup-imdb-arrow-cache.sh` - Clean up all resources
-- `ingest_imdb_to_iceberg.py` - **Complete IMDB ingestion script** (downloads HuggingFace data + creates Iceberg table)
+**Simple Test (dry-run):**
+```bash
+kubectl apply -f imdb-trainjob-simple.yaml
+```
 
-## Dataset Details
+**Production Training:**
+```bash
+kubectl apply -f imdb-trainjob-real.yaml
+```
 
-- **Source**: IMDB movie reviews from HuggingFace
-- **Records**: ~100,000 movie reviews
-- **Schema**: `text` (string), `label` (int64)
-- **Labels**: 0=negative review, 1=positive review
-- **Storage**: S3 Iceberg table at `s3://ricardo.hf.datasets/iceberg/hf_datasets.db/imdb_reviews/`
+**Manual Training:**
+```bash
+python3 imdb_training.py \\
+  --model-name distilgpt2 \\
+  --max-samples 100 \\
+  --use-arrow-cache \\
+  --use-irsa \\
+  --dry-run
+```
 
-## Data Ingestion
+## ⚙️ Configuration Options
 
-To create/update the IMDB Iceberg table from HuggingFace:
+### Training Script Options
 
 ```bash
-# Complete ingestion from HuggingFace (one command)
-python3 ingest_imdb_to_iceberg.py
+python3 imdb_training.py [OPTIONS]
 
-# With custom parameters
-python3 ingest_imdb_to_iceberg.py --bucket my-bucket --profile my-profile
+# Model and Data
+--model-name MODEL          # Model to use (default: distilgpt2)
+--max-samples N             # Limit training samples
+--use-arrow-cache           # Use Arrow Cache for data loading
 
-# Only ingest existing parquet files (skip HuggingFace download)
-python3 ingest_imdb_to_iceberg.py --skip-download
+# Arrow Cache Connection
+--head-host HOST            # Arrow Cache head service
+--head-port PORT            # Arrow Cache head port
+--in-cluster               # Running inside Kubernetes
 
-# Use different dataset
-python3 ingest_imdb_to_iceberg.py --dataset sentiment140 --table sentiment_data
+# AWS Authentication
+--use-irsa                 # Use IRSA for AWS auth
+--aws-profile PROFILE      # AWS profile (if not using IRSA)
+
+# Training Control
+--dry-run                  # Test mode (no actual training)
+--skip-checkpoint          # Skip saving model checkpoints
 ```
 
-**What the script does:**
-1. 🔽 Downloads IMDB dataset from HuggingFace
-2. 🪣 Creates S3 bucket if it doesn't exist
-3. 🗄️ Creates Glue database if it doesn't exist
-4. 📊 Creates Iceberg table with proper schema
-5. ⬆️ Ingests all data directly into Iceberg (no intermediate files)
-
-## Prerequisites
-
-- Docker and kind cluster
-- AWS profile `root-ricardo` configured
-- Python with pyarrow, grpcio, pandas, datasets
-- kubectl access to Kubernetes cluster
-
-## Usage
-
-The new `demo-client.py` uses the shared library from `../lib/` for cleaner code:
-
-```python
-from arrow_cache_client import BaseArrowCacheClient, S3Utils
-
-class IMDBArrowCacheClient(BaseArrowCacheClient):
-    # IMDB-specific functionality
-```
-
-See the main demo README (`../../README-IMDB.md`) for complete documentation.
+This IMDB training system provides a complete sentiment classification pipeline with distributed data access via Arrow Cache.

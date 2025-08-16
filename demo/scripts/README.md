@@ -18,7 +18,7 @@ scripts/
 ```bash
 # Deploy
 cd imdb/
-./deploy-imdb-arrow-cache.sh
+./setup-imdb-arrow-cache.sh
 
 # Port forward
 ./port-forward-imdb-arrow-cache.sh &
@@ -31,10 +31,7 @@ python3 demo-client.py --demo
 ```bash
 # Deploy
 cd regular/
-./setup-demo.sh
-
-# Port forward
-./setup-port-forward.sh &
+./setup-arrow-cache.sh
 
 # Run demo
 python3 demo-client.py --demo
@@ -53,27 +50,25 @@ Both demo clients inherit from `BaseArrowCacheClient` to avoid code duplication.
 
 ### IMDB Directory (`imdb/`)
 - `demo-client.py` - IMDB-specific demo client
-- `deploy-imdb-arrow-cache.sh` - Deploy IMDB demo
+- `setup-imdb-arrow-cache.sh` - Setup IMDB demo
 - `port-forward-imdb-arrow-cache.sh` - Port forwarding
 - `cleanup-imdb-arrow-cache.sh` - Cleanup resources
 - `ingest_imdb_to_iceberg.py` - Data ingestion script
 
 ### Regular Directory (`regular/`)
 - `demo-client.py` - Regular demo client
-- `demo-arrow-cache-client.py` - Original client (legacy)
-- `setup-demo.sh` - Deploy regular demo
-- `setup-port-forward.sh` - Port forwarding
+- `setup-arrow-cache.sh` - Complete environment setup
 - `generate-demo-data.py` - Synthetic data generation
-- Other setup and utility scripts
+- `demo-arrow-cache-status.sh` - Status checker
+- `setup-aws.sh` - AWS credentials configuration
 
 ### Library Directory (`lib/`)
 - `__init__.py` - Python package marker
 - `arrow_cache_client.py` - Shared client functionality
 
-## Migration Notes
+## Architecture Notes
 
-- Old clients are preserved for compatibility
-- New clients use the shared library for cleaner code
+- Clients use the shared library for cleaner code
 - File paths updated to reflect new structure
 - Both demo types can coexist independently
 

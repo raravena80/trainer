@@ -2,237 +2,301 @@
 """
 IMDB Arrow Cache Demo Client
 
-This script demonstrates how to interact with the distributed Arrow Cache system
-using the IMDB dataset stored in an Iceberg table. It shows how to:
-1. Connect to the head node
-2. Query IMDB movie review data (text and labels)
-3. Demonstrate distributed caching of real text data
-
-The IMDB dataset contains:
-- text: Movie review text
-- label: Sentiment label (0=negative, 1=positive)
-
-Prerequisites:
-- pyarrow with flight support: pip install pyarrow
-- grpcio: pip install grpcio
+This client demonstrates how to:
+1. Connect to the IMDB Arrow Cache system
+2. Query movie review data from distributed workers
+3. Show sample sentiment classification data
+4. Test different query patterns and performance
 
 Usage:
-    python3 demo/scripts/imdb/demo-client.py --host localhost --port 50051 --demo
+    python3 demo-client.py --demo          # Quick demo mode
+    python3 demo-client.py --performance   # Performance test
+    python3 demo-client.py --samples 1000  # Custom sample size
 """
 
 import argparse
-import importlib.util
 import logging
-import os
 import sys
+import time
 
 import pyarrow as pa
+import pyarrow.flight as flight
 
-# Add the lib directory to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "lib"))
+# Add lib directory to path
+sys.path.append("../lib")
 
-# Load arrow_cache_client module
-_spec = importlib.util.spec_from_file_location(
-    "arrow_cache_client",
-    os.path.join(os.path.dirname(__file__), "..", "lib", "arrow_cache_client.py"),
-)
-_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_module)
-BaseArrowCacheClient = _module.BaseArrowCacheClient
-S3Utils = _module.S3Utils
+from arrow_cache_client import BaseArrowCacheClient  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger(__name__)
 
 
-class IMDBArrowCacheClient(BaseArrowCacheClient):
-    """Client for interacting with the distributed Arrow Cache system using IMDB data."""
+class IMDBDemoClient(BaseArrowCacheClient):
+    """Demo client for IMDB Arrow Cache system."""
 
     def __init__(self, host: str = "localhost", port: int = 50051):
-        """Initialize the IMDB Arrow Cache client."""
         super().__init__(host, port)
         self.namespace = "arrow-cache-imdb"
 
-    def get_imdb_data_files(self):
-        """Get IMDB data file paths from the Iceberg table."""
-        bucket_prefix = (
-            "s3://ricardo.hf.datasets/iceberg/hf_datasets.db/imdb_reviews/data/"
-        )
-        return S3Utils.list_s3_files(bucket_prefix, profile="root-ricardo")
-
-    def process_query_result(self, result: pa.Table, description: str):
-        """Process IMDB-specific query results."""
+    def process_query_result(self, result, description: str):
+        """Process IMDB demo query results with sentiment analysis."""
         if len(result) > 0:
+            self.logger.info(f"=== {description} ===")
+            self.logger.info(f"Retrieved {len(result)} IMDB movie reviews")
             self.logger.info(f"Columns: {result.column_names}")
-            self.logger.info(f"Schema: {result.schema}")
 
-            # Convert to pandas for easier display
+            # Convert to pandas for analysis
             df = result.to_pandas()
 
-            # Show sample reviews
-            self.logger.info("=== Sample IMDB Reviews ===")
-            for i in range(min(3, len(df))):
-                row = df.iloc[i]
-                sentiment = "Positive" if row["label"] == 1 else "Negative"
-                review_preview = (
-                    row["text"][:100] + "..." if len(row["text"]) > 100 else row["text"]
-                )
-                self.logger.info(f"Review {i+1} ({sentiment}): {review_preview}")
-
-            # Show label distribution
+            # Show sentiment distribution
             if "label" in df.columns:
                 label_counts = df["label"].value_counts()
-                self.logger.info("Label distribution in this partition:")
-                self.logger.info(f"  Negative (0): {label_counts.get(0, 0)} reviews")
-                self.logger.info(f"  Positive (1): {label_counts.get(1, 0)} reviews")
+                total = len(df)
+                self.logger.info("Sentiment Distribution:")
+                for label, count in label_counts.items():
+                    sentiment = "Positive" if label == 1 else "Negative"
+                    percentage = (count / total) * 100
+                    self.logger.info(f"  {sentiment}: {count} ({percentage:.1f}%)")
 
-    def demonstrate_imdb_caching(self):
-        """Demonstrate the caching functionality using IMDB movie review data."""
-        self.logger.info("Starting IMDB Arrow Cache demonstration...")
-
-        self.logger.info("=== IMDB Dataset Overview ===")
-        self.logger.info("Dataset: IMDB Movie Reviews")
-        self.logger.info("Schema: text (string), label (int64)")
-        self.logger.info("Labels: 0=negative review, 1=positive review")
-        self.logger.info("Total records: ~100,000 movie reviews")
-
-        # Try to get real data file paths (for informational purposes)
-        sample_files = self.get_imdb_data_files()
-
-        if not sample_files:
-            self.logger.info(
-                "No S3 data files found in metadata, but system may still have cached data"
-            )
+            # Show sample reviews
+            self.logger.info("\n=== Sample Movie Reviews ===")
+            for i in range(min(3, len(df))):
+                sample = df.iloc[i]
+                sentiment = "Positive" if sample.get("label") == 1 else "Negative"
+                text = str(sample.get("text", ""))[:200]
+                self.logger.info(f"\nReview {i+1} [{sentiment}]:")
+                self.logger.info(f"  {text}...")
         else:
-            self.logger.info(f"Found {len(sample_files)} data files in S3:")
-            for i, file_path in enumerate(sample_files, 1):
-                self.logger.info(f"  {i}. {file_path}")
+            self.logger.warning(f"No data retrieved for {description}")
 
-        try:
-            # Step 1: Get flight info for different partitions
-            self.logger.info(
-                "=== Step 1: Getting partition information from head node ==="
-            )
+    def run_imdb_demo(self):
+        """Run comprehensive IMDB dataset demo."""
+        self.logger.info("🎬 Starting IMDB Movie Review Demo")
+        self.logger.info("=" * 50)
 
-            total_partitions = 4  # Test with 4 partitions
-            partition_infos = []
+        # Connect to Arrow Cache
+        self.connect()
 
-            for partition_id in range(total_partitions):
-                self.logger.info(f"Getting flight info for partition {partition_id}")
-                try:
-                    flight_info = self.get_flight_info_for_partition(
-                        partition_id, total_partitions
-                    )
-                    partition_infos.append((partition_id, flight_info))
+        # Query all partitions like the training script does
+        num_partitions = 4
+        all_data = []
 
-                    self.logger.info(
-                        f"Partition {partition_id}: {len(flight_info.endpoints)} worker endpoints"
-                    )
+        for partition_id in range(num_partitions):
+            try:
+                self.logger.info(f"Fetching partition {partition_id}/{num_partitions}")
 
-                    # Show worker endpoints for this partition
-                    for i, endpoint in enumerate(flight_info.endpoints):
-                        if endpoint.locations:
-                            worker_uri = endpoint.locations[0].uri
-                            self.logger.info(f"  Worker {i}: {worker_uri}")
+                flight_info = self.get_flight_info_for_partition(
+                    partition_id, num_partitions
+                )
 
-                except Exception as e:
+                if flight_info.endpoints:
+                    for endpoint in flight_info.endpoints:
+                        if endpoint.locations and endpoint.ticket:
+                            worker_uri = self.translate_worker_uri(
+                                endpoint.locations[0].uri, self.namespace
+                            )
+
+                            self.logger.info(f"Querying worker at {worker_uri}")
+
+                            try:
+                                worker_location = flight.Location(worker_uri)
+                                worker_client = flight.FlightClient(worker_location)
+
+                                flight_stream = worker_client.do_get(endpoint.ticket)
+                                partition_data = flight_stream.read_all()
+
+                                self.logger.info(
+                                    f"Retrieved {len(partition_data)} rows from "
+                                    f"partition {partition_id}"
+                                )
+
+                                # Process a sample of this partition
+                                sample_size = min(100, len(partition_data))
+                                if len(partition_data) > sample_size:
+                                    # Take first 100 rows as sample
+                                    sample_data = partition_data.slice(0, sample_size)
+                                else:
+                                    sample_data = partition_data
+
+                                self.process_query_result(
+                                    sample_data,
+                                    f"Partition {partition_id} Sample ({sample_size} reviews)",
+                                )
+                                all_data.append(partition_data)
+                                break
+
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"Failed to query worker {worker_uri}: {e}"
+                                )
+                else:
                     self.logger.warning(
-                        f"Failed to get flight info for partition {partition_id}: {e}"
+                        f"No endpoints found for partition {partition_id}"
                     )
 
-                import time
-
-                time.sleep(1)  # Small delay between requests
-
-            # Step 2: Query IMDB data from workers directly
-            self.logger.info("=== Step 2: Querying IMDB review data from workers ===")
-
-            if partition_infos:
-                self.logger.info(
-                    f"Successfully got flight info for {len(partition_infos)} partitions"
-                )
-
-                # Query different ranges of IMDB reviews
-                sample_queries = [
-                    (0, 99, "First 100 reviews"),
-                    (1000, 1099, "Reviews 1000-1099"),
-                    (5000, 5049, "Mid-range reviews"),
-                    (10000, 10099, "Later reviews"),
-                ]
-
-                self.query_workers_for_data(
-                    partition_infos, sample_queries, self.namespace
-                )
-            else:
+            except Exception as e:
                 self.logger.warning(
-                    "No valid partition information received - cannot query data"
+                    f"Failed to get flight info for partition {partition_id}: {e}"
                 )
 
-        except Exception as e:
-            self.logger.error(f"IMDB demo failed: {e}")
-            raise
+            # Small delay between partitions to avoid overwhelming servers
+            time.sleep(0.5)
 
-    def run_imdb_performance_test(self, num_queries: int = 5):
-        """Run a performance test using IMDB data queries."""
-        # Define realistic query ranges for IMDB data
-        imdb_ranges = [
+        if all_data:
+            # Show overall statistics
+            total_data = pa.concat_tables(all_data)
+            self.logger.info("\n🎬 Overall IMDB Dataset Statistics:")
+            self.logger.info(f"Total samples across all partitions: {len(total_data)}")
+
+            # Show overall sentiment distribution
+            df_total = total_data.to_pandas()
+            if "label" in df_total.columns:
+                label_counts = df_total["label"].value_counts()
+                total = len(df_total)
+                self.logger.info("Overall Sentiment Distribution:")
+                for label, count in label_counts.items():
+                    sentiment = "Positive" if label == 1 else "Negative"
+                    percentage = (count / total) * 100
+                    self.logger.info(f"  {sentiment}: {count:,} ({percentage:.1f}%)")
+
+        self.logger.info("🎬 IMDB demo completed!")
+
+    def run_sentiment_analysis_demo(self):
+        """Run sentiment-focused demo queries."""
+        self.logger.info("😊😞 Running Sentiment Analysis Demo")
+
+        self.connect()
+
+        # Query all partitions systematically for sentiment analysis
+        num_partitions = 4
+        all_sentiment_data = []
+
+        for partition_id in range(num_partitions):
+            try:
+                self.logger.info(
+                    f"Analyzing sentiment in partition {partition_id}/{num_partitions}"
+                )
+
+                flight_info = self.get_flight_info_for_partition(
+                    partition_id, num_partitions
+                )
+
+                if flight_info.endpoints:
+                    for endpoint in flight_info.endpoints:
+                        if endpoint.locations and endpoint.ticket:
+                            worker_uri = self.translate_worker_uri(
+                                endpoint.locations[0].uri, self.namespace
+                            )
+
+                            self.logger.info(
+                                f"Querying worker at {worker_uri} for sentiment analysis"
+                            )
+
+                            try:
+                                worker_location = flight.Location(worker_uri)
+                                worker_client = flight.FlightClient(worker_location)
+
+                                flight_stream = worker_client.do_get(endpoint.ticket)
+                                partition_data = flight_stream.read_all()
+
+                                self.logger.info(
+                                    f"Retrieved {len(partition_data)} rows from "
+                                    f"partition {partition_id}"
+                                )
+
+                                # Process sentiment analysis for this partition
+                                sample_size = min(500, len(partition_data))
+                                if len(partition_data) > sample_size:
+                                    sample_data = partition_data.slice(0, sample_size)
+                                else:
+                                    sample_data = partition_data
+
+                                self.process_query_result(
+                                    sample_data,
+                                    f"Partition {partition_id} Sentiment Analysis "
+                                    f"({sample_size} reviews)",
+                                )
+                                all_sentiment_data.append(sample_data)
+                                break
+
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"Failed to query worker {worker_uri}: {e}"
+                                )
+                else:
+                    self.logger.warning(
+                        f"No endpoints found for partition {partition_id}"
+                    )
+
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to get flight info for partition {partition_id}: {e}"
+                )
+
+            time.sleep(0.5)  # Small delay between partitions
+
+        if all_sentiment_data:
+            # Show cross-partition sentiment analysis
+            total_data = pa.concat_tables(all_sentiment_data)
+            self.logger.info("\n😊😞 Cross-Partition Sentiment Analysis:")
+            self.logger.info(f"Total samples analyzed: {len(total_data)}")
+
+            # Show overall sentiment distribution across all partitions
+            df_total = total_data.to_pandas()
+            if "label" in df_total.columns:
+                label_counts = df_total["label"].value_counts()
+                total = len(df_total)
+                self.logger.info(
+                    "Overall Sentiment Distribution Across All Partitions:"
+                )
+                for label, count in label_counts.items():
+                    sentiment = "Positive" if label == 1 else "Negative"
+                    percentage = (count / total) * 100
+                    self.logger.info(f"  {sentiment}: {count:,} ({percentage:.1f}%)")
+
+        self.logger.info("😊😞 Sentiment analysis demo completed!")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="IMDB Arrow Cache Demo Client")
+    parser.add_argument("--host", default="localhost", help="Arrow Cache head host")
+    parser.add_argument("--port", type=int, default=50051, help="Arrow Cache head port")
+    parser.add_argument("--demo", action="store_true", help="Run quick demo")
+    parser.add_argument(
+        "--sentiment", action="store_true", help="Run sentiment analysis demo"
+    )
+    parser.add_argument(
+        "--performance", action="store_true", help="Run performance test"
+    )
+    parser.add_argument(
+        "--queries", type=int, default=10, help="Number of performance test queries"
+    )
+
+    args = parser.parse_args()
+
+    # Create demo client
+    demo_client = IMDBDemoClient(args.host, args.port)
+
+    if args.demo:
+        demo_client.run_imdb_demo()
+    elif args.sentiment:
+        demo_client.run_sentiment_analysis_demo()
+    elif args.performance:
+        # Custom query ranges for IMDB performance testing
+        imdb_query_ranges = [
             (0, 999, "First 1000 reviews"),
             (1000, 2999, "Reviews 1000-2999"),
             (5000, 7999, "Mid-range reviews"),
             (10000, 12999, "Later reviews"),
             (20000, 24999, "Final batch"),
         ]
-
-        self.run_performance_test(num_queries, imdb_ranges)
-
-
-def main():
-    """Main function to run the IMDB demo."""
-    parser = argparse.ArgumentParser(description="IMDB Arrow Cache Demo Client")
-    parser.add_argument(
-        "--host", default="localhost", help="Arrow Cache head node host"
-    )
-    parser.add_argument(
-        "--port", type=int, default=50051, help="Arrow Cache head node port"
-    )
-    parser.add_argument(
-        "--demo", action="store_true", help="Run the full IMDB demonstration"
-    )
-    parser.add_argument(
-        "--perf-test", action="store_true", help="Run IMDB performance test"
-    )
-    parser.add_argument(
-        "--queries", type=int, default=5, help="Number of queries for performance test"
-    )
-
-    args = parser.parse_args()
-
-    # Create and connect client
-    client = IMDBArrowCacheClient(args.host, args.port)
-
-    try:
-        client.connect()
-
-        if args.demo:
-            client.demonstrate_imdb_caching()
-
-        if args.perf_test:
-            client.run_imdb_performance_test(args.queries)
-
-        if not args.demo and not args.perf_test:
-            logger.info("No action specified. Use --demo or --perf-test")
-            logger.info("Example: python3 demo/scripts/imdb/demo-client.py --demo")
-
-    except Exception as e:
-        logger.error(f"IMDB demo failed: {e}")
-        return 1
-
-    logger.info("IMDB demo completed successfully!")
-    return 0
+        demo_client.run_performance_test(args.queries, imdb_query_ranges)
+    else:
+        print("Please specify --demo, --sentiment, or --performance")
+        print("Use --help for more options")
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()

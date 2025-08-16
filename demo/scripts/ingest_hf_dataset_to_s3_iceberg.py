@@ -8,7 +8,6 @@ This script handles the complete workflow:
 3. Creates Iceberg table with proper schema
 4. Ingests all data directly into Iceberg table
 
-No intermediate parquet files needed - complete one-stop solution.
 """
 
 import argparse

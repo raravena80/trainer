@@ -1,0 +1,31 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: torch-simple
+spec:
+  mlPolicy:
+    numNodes: 1
+  template:
+    spec:
+      replicatedJobs:
+      - name: node
+        replicas: 1
+        template:
+          metadata:
+            labels:
+              trainer.kubeflow.org/trainjob-ancestor-step: trainer
+          spec:
+            template:
+              spec:
+                containers:
+                - name: node
+                  image: python:3.11-slim
+                  command:
+                  - /bin/bash
+                  - -c
+                  - |
+                    echo "IMDB Training Runtime"
+                    echo "--------------------------------------"
+                    echo "Runtime Environment:"
+                    env | head -10
+                  resources: {}

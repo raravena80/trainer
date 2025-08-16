@@ -224,12 +224,12 @@ def main():
             logger.info("No action specified. Use --demo or --perf-test")
             logger.info("Example: python3 demo/scripts/regular/demo-client.py --demo")
 
+        logger.info("Demo completed successfully!")
+        return 0
+
     except Exception as e:
         logger.error(f"Demo failed: {e}")
         return 1
-
-    logger.info("Demo completed successfully!")
-    return 0
 
 
 if __name__ == "__main__":

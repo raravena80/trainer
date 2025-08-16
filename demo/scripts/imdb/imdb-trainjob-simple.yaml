@@ -1,0 +1,46 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: imdb-training-simple
+  namespace: arrow-cache-imdb
+spec:
+  runtimeRef:
+    name: torch-simple
+  trainer:
+    image: python:3.11-slim
+    command:
+      - /bin/bash
+      - -c
+    args:
+      - |
+        # Install required dependencies
+        pip install transformers[torch] datasets pyarrow boto3 torch pyiceberg mypy_boto3_glue accelerate pandas
+
+        # Create working directory and copy the mounted scripts (follow symlinks)
+        mkdir -p /app
+        cp -rL /scripts/* /app/
+        cd /app
+
+        # Simple IMDB training test - just verify script loads
+        python3 imdb_training.py --help
+    numNodes: 1
+    resourcesPerNode:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+  podSpecOverrides:
+    - targetJobs:
+        - name: node
+      volumes:
+        - name: training-scripts
+          configMap:
+            name: imdb-training-script
+      containers:
+        - name: node
+          volumeMounts:
+            - name: training-scripts
+              mountPath: /scripts
+              readOnly: true
