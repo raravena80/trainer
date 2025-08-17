@@ -394,7 +394,9 @@ pub async fn run(
     .map_err(|e| format!("Failed to create provider: {}", e))?;
     let mut worker_map: HashMap<String, String> = HashMap::new();
     for (index, worker_uri) in workers.into_iter().enumerate() {
-        worker_map.insert(index.to_string(), format!("grpc://{worker_uri}"));
+        // Strip http:// prefix if present before adding grpc:// prefix
+        let clean_uri = worker_uri.strip_prefix("http://").unwrap_or(&worker_uri);
+        worker_map.insert(index.to_string(), format!("grpc://{clean_uri}"));
     }
     let mut distributor = Distributor::new(
         ctx,
