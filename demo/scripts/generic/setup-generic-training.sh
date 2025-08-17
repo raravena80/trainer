@@ -79,6 +79,13 @@ Examples:
   # Run custom dataset training
   $0 --dataset-name my-dataset --dataset-config /path/to/custom.yaml --model-name gpt2
 
+Note: When using --use-arrow-cache, make sure your Arrow Cache is deployed first:
+  # With LeaderWorkerSet (recommended for better resource management):
+  ./setup-alpaca-arrow-cache.sh --use-leaderworkerset
+
+  # With traditional Deployment/StatefulSet:
+  ./setup-alpaca-arrow-cache.sh
+
 EOF
 }
 

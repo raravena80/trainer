@@ -54,6 +54,7 @@ Options:
   --no-build        Skip Docker image build (use existing image)
   --s3-path URL     Use S3 for data storage (requires AWS credentials)
   --iam-role ARN    Use IAM role instead of AWS credentials (EKS only, e.g., arn:aws:iam::123456789:role/MyRole)
+  --use-leaderworkerset Use LeaderWorkerSet instead of separate Deployment/StatefulSet
   --records NUM     Number of demo records (default: 10000)
   --files NUM       Number of data files (default: 4)
   --no-port-forward Skip port forwarding setup
@@ -68,6 +69,12 @@ Examples:
 
   # Setup with S3 and IAM role
   $0 --s3-path s3://my-bucket/demo-data --iam-role arn:aws:iam::120832439621:role/ArrrowDemo
+
+  # Setup with LeaderWorkerSet
+  $0 --use-leaderworkerset
+
+  # Setup with LeaderWorkerSet and IAM role
+  $0 --use-leaderworkerset --iam-role arn:aws:iam::120832439621:role/ArrrowDemo
 
   # Just cluster and cache setup
   $0 --cluster-only
@@ -232,20 +239,49 @@ EOF
 
 deploy_arrow_cache() {
     local iam_role_arn="$1"
+    local use_leaderworkerset="$2"
 
     log "Deploying arrow cache to kind cluster..."
 
     cd "$TRAINER_ROOT"
 
-    # Choose deployment method based on IAM role usage
+    # Choose deployment method based on IAM role usage and deployment type
     if [ -n "$iam_role_arn" ]; then
+        # For IRSA, we need to update the overlay creation to handle LeaderWorkerSet
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            # Update the IRSA overlay to use LeaderWorkerSet
+            rm -f /tmp/arrow-cache-irsa-overlay/kustomization.yaml
+            cp demo/manifests/arrow-cache/overlays/irsa/kustomization-lws.yaml /tmp/arrow-cache-irsa-overlay/kustomization.yaml
+            cp demo/manifests/arrow-cache/overlays/irsa/lws-patch.yaml /tmp/arrow-cache-irsa-overlay/
+        fi
+
         log "Deploying with IRSA overlay (no AWS credentials in pods)..."
         kubectl apply -k /tmp/arrow-cache-irsa-overlay/
-        success "IRSA-enabled arrow cache deployed"
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            success "IRSA-enabled arrow cache deployed using LeaderWorkerSet"
+        else
+            success "IRSA-enabled arrow cache deployed using Deployment/StatefulSet"
+        fi
     else
-        log "Deploying with standard AWS credentials..."
-        kubectl apply -k demo/manifests/arrow-cache/
-        success "Standard arrow cache deployed"
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            log "Deploying with LeaderWorkerSet and standard AWS credentials..."
+            # Create temporary directory for LeaderWorkerSet deployment
+            LWS_TEMP_DIR="/tmp/arrow-cache-lws"
+            rm -rf "$LWS_TEMP_DIR"
+            mkdir -p "$LWS_TEMP_DIR"
+            cp demo/manifests/arrow-cache/kustomization-lws.yaml "$LWS_TEMP_DIR/kustomization.yaml"
+            cp demo/manifests/arrow-cache/namespace.yaml "$LWS_TEMP_DIR/"
+            cp demo/manifests/arrow-cache/configmap.yaml "$LWS_TEMP_DIR/"
+            cp demo/manifests/arrow-cache/aws-secret.yaml "$LWS_TEMP_DIR/"
+            cp demo/manifests/arrow-cache/arrow-cache-leaderworkerset.yaml "$LWS_TEMP_DIR/"
+            kubectl apply -k "$LWS_TEMP_DIR/"
+            rm -rf "$LWS_TEMP_DIR"
+            success "Arrow cache deployed using LeaderWorkerSet"
+        else
+            log "Deploying with standard AWS credentials..."
+            kubectl apply -k demo/manifests/arrow-cache/
+            success "Standard arrow cache deployed"
+        fi
     fi
 
     # Clean up temporary overlay directory if used
@@ -255,8 +291,13 @@ deploy_arrow_cache() {
 
     # Wait for deployments to be ready
     log "Waiting for deployments to be ready..."
-    kubectl wait --for=condition=available --timeout=300s deployment/arrow-cache-head -n "$NAMESPACE"
-    kubectl wait --for=condition=ready --timeout=300s statefulset/arrow-cache-worker -n "$NAMESPACE"
+    if [[ "$use_leaderworkerset" == "true" ]]; then
+        # Wait for LeaderWorkerSet pods to be ready
+        kubectl wait --for=condition=ready pod -l leaderworkerset.sigs.k8s.io/name=arrow-cache-lws -n "$NAMESPACE" --timeout=300s
+    else
+        kubectl wait --for=condition=available --timeout=300s deployment/arrow-cache-head -n "$NAMESPACE"
+        kubectl wait --for=condition=ready --timeout=300s statefulset/arrow-cache-worker -n "$NAMESPACE"
+    fi
 
     success "Arrow cache deployed successfully."
 }
@@ -432,6 +473,7 @@ main() {
     local no_build=false
     local s3_path=""
     local iam_role_arn=""
+    local use_leaderworkerset="false"
     local records=10000
     local files=4
     local no_port_forward=false
@@ -462,6 +504,10 @@ main() {
                 iam_role_arn="$2"
                 shift 2
                 ;;
+            --use-leaderworkerset)
+                use_leaderworkerset="true"
+                shift
+                ;;
             --records)
                 records="$2"
                 shift 2
@@ -487,6 +533,7 @@ main() {
     log "Starting Unified Arrow Cache Setup"
     echo "=================================="
     log "Cluster: $CLUSTER_NAME"
+    log "Deployment Type: $([ "$use_leaderworkerset" == "true" ] && echo "LeaderWorkerSet" || echo "Deployment/StatefulSet")"
     log "Records: $records"
     log "Files: $files"
     if [[ -n "$s3_path" ]]; then
@@ -526,7 +573,7 @@ main() {
                 build_docker_image
             fi
         fi
-        deploy_arrow_cache "$iam_role_arn"
+        deploy_arrow_cache "$iam_role_arn" "$use_leaderworkerset"
     fi
 
     # Generate and configure data if not cluster-only

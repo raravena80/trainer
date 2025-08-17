@@ -22,6 +22,8 @@ SUFFIX="$(date +%Y%m%d-%H%M%S)"
 SLEEP_TIME=30
 INSTALL_TRAINER=true
 INSTALL_TRAINER_RUNTIMES=true
+INSTALL_LEADERWORKERSET=true
+LEADERWORKERSET_VERSION=${LEADERWORKERSET_VERSION:-"v0.7.0"}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source shared functions from IRSA setup if available
@@ -67,6 +69,9 @@ Options:
   --no-install-trainer        Skip installing Kubeflow Trainer manager
   --install-trainer-runtimes  Install Kubeflow Trainer runtimes (default: true)
   --no-install-trainer-runtimes Skip installing Kubeflow Trainer runtimes
+  --install-leaderworkerset   Install LeaderWorkerSet controller (default: true)
+  --no-install-leaderworkerset Skip installing LeaderWorkerSet controller
+  --leaderworkerset-version   LeaderWorkerSet version to install (default: v0.7.0)
   --debug                     Enable debug output
   --help                      Show this help message
 
@@ -292,6 +297,39 @@ EOF
     fi
 }
 
+install_leaderworkerset() {
+    if [[ "$INSTALL_LEADERWORKERSET" == false ]]; then
+        log "Skipping LeaderWorkerSet installation (disabled)."
+        return 0
+    fi
+
+    log "Installing LeaderWorkerSet controller version $LEADERWORKERSET_VERSION..."
+
+    local lws_manifest_url="https://github.com/kubernetes-sigs/lws/releases/download/$LEADERWORKERSET_VERSION/manifests.yaml"
+
+    # Install LeaderWorkerSet
+    if kubectl apply --server-side -f "$lws_manifest_url"; then
+        success "LeaderWorkerSet manifests applied successfully."
+    else
+        error "Failed to install LeaderWorkerSet."
+        exit 1
+    fi
+
+    # Wait for the controller to be ready
+    log "Waiting for LeaderWorkerSet controller to be ready..."
+    if kubectl wait deploy/lws-controller-manager -n lws-system --for=condition=available --timeout=300s; then
+        success "LeaderWorkerSet controller is ready."
+    else
+        warn "Timeout waiting for LeaderWorkerSet controller. It may still be starting up."
+    fi
+
+    # Show status
+    echo
+    log "LeaderWorkerSet controller status:"
+    kubectl get deployments -n lws-system || true
+    echo
+}
+
 install_kubeflow_trainer_components() {
     if [[ "$INSTALL_TRAINER" == false ]] && [[ "$INSTALL_TRAINER_RUNTIMES" == false ]]; then
         log "Skipping Kubeflow Trainer components installation (both disabled)."
@@ -464,6 +502,19 @@ show_cluster_info() {
         fi
     done
     echo
+    echo "=== LeaderWorkerSet Controller ==="
+    if [[ "$INSTALL_LEADERWORKERSET" == true ]]; then
+        if kubectl get namespace lws-system &>/dev/null; then
+            echo "  ✅ LeaderWorkerSet Controller (version: $LEADERWORKERSET_VERSION)"
+            local lws_pods=$(kubectl get pods -n lws-system --no-headers 2>/dev/null | wc -l)
+            echo "    └── Controller pods: $lws_pods"
+        else
+            echo "  ❌ LeaderWorkerSet Controller (installation failed or pending)"
+        fi
+    else
+        echo "  ➖ LeaderWorkerSet Controller (installation skipped)"
+    fi
+    echo
     echo "=== Kubeflow Trainer Components ==="
     if [[ "$INSTALL_TRAINER" == true ]] || [[ "$INSTALL_TRAINER_RUNTIMES" == true ]]; then
         if [[ "$INSTALL_TRAINER" == true ]]; then
@@ -501,6 +552,13 @@ show_cluster_info() {
     echo "  - Regular demo: cd regular/ && ./setup-arrow-cache.sh"
     echo "  - IMDB demo: cd imdb/ && ./setup-imdb-arrow-cache.sh"
     echo "  - Alpaca demo: cd alpaca/ && ./setup-alpaca-arrow-cache.sh"
+
+    if [[ "$INSTALL_LEADERWORKERSET" == true ]]; then
+        echo
+        echo "LeaderWorkerSet usage:"
+        echo "  - Create LeaderWorkerSet resources for leader-worker pattern workloads"
+        echo "  - Example: kubectl apply -f your-leaderworkerset.yaml"
+    fi
 
     if [[ "$INSTALL_TRAINER" == true ]] || [[ "$INSTALL_TRAINER_RUNTIMES" == true ]]; then
         echo
@@ -573,6 +631,18 @@ main() {
                 INSTALL_TRAINER_RUNTIMES=false
                 shift
                 ;;
+            --install-leaderworkerset)
+                INSTALL_LEADERWORKERSET=true
+                shift
+                ;;
+            --no-install-leaderworkerset)
+                INSTALL_LEADERWORKERSET=false
+                shift
+                ;;
+            --leaderworkerset-version)
+                LEADERWORKERSET_VERSION="$2"
+                shift 2
+                ;;
             --debug)
                 set -x
                 shift
@@ -618,6 +688,9 @@ main() {
     else
         create_basic_kind_cluster
     fi
+
+    # Install LeaderWorkerSet controller
+    install_leaderworkerset
 
     # Install Kubeflow Trainer components
     install_kubeflow_trainer_components

@@ -1,0 +1,12 @@
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/12
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/11
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/10
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/8
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/7
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/6

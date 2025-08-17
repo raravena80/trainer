@@ -45,6 +45,7 @@ Options:
   --no-build           Skip Docker image build check
   --aws-profile NAME   AWS profile to use (default: root-ricardo)
   --iam-role ARN       Use IAM role instead of AWS credentials (EKS only, e.g., arn:aws:iam::123456789:role/MyRole)
+  --use-leaderworkerset Use LeaderWorkerSet instead of separate Deployment/StatefulSet
   --help               Show this help message
 
 Examples:
@@ -62,6 +63,12 @@ Examples:
 
   # Use IAM role instead of credentials
   $0 --iam-role arn:aws:iam::120832439621:role/ArrowCacheRole
+
+  # Use LeaderWorkerSet deployment pattern
+  $0 --use-leaderworkerset
+
+  # Use LeaderWorkerSet with IAM role
+  $0 --use-leaderworkerset --iam-role arn:aws:iam::120832439621:role/ArrowCacheRole
 
 IAM Role Setup:
   To create an IAM role with the required permissions (S3 + Glue), use:
@@ -272,6 +279,7 @@ EOF
 
 deploy_kubernetes_resources() {
     local iam_role_arn="$1"
+    local use_leaderworkerset="$2"
 
     log "Deploying Kubernetes resources..."
 
@@ -280,28 +288,64 @@ deploy_kubernetes_resources() {
         error "Manifests directory not found: $MANIFESTS_DIR"
     fi
 
-    # Choose deployment method based on IAM role usage
+    # Choose deployment method based on IAM role usage and deployment type
     if [ -n "$iam_role_arn" ]; then
+        # For IRSA, we need to update the overlay creation to handle LeaderWorkerSet
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            # Update the IRSA overlay to use LeaderWorkerSet
+            rm -f "$IRSA_OVERLAY_DIR/kustomization.yaml"
+            cp "$MANIFESTS_DIR/overlays/irsa/kustomization-lws.yaml" "$IRSA_OVERLAY_DIR/kustomization.yaml"
+            cp "$MANIFESTS_DIR/overlays/irsa/lws-patch.yaml" "$IRSA_OVERLAY_DIR/"
+        fi
+
         log "Deploying with IRSA overlay (no AWS credentials in pods)..."
         kubectl apply -k "$IRSA_OVERLAY_DIR/"
-        success "IRSA-enabled Alpaca arrow cache deployed"
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            success "IRSA-enabled Alpaca arrow cache deployed using LeaderWorkerSet"
+        else
+            success "IRSA-enabled Alpaca arrow cache deployed using Deployment/StatefulSet"
+        fi
     else
-        log "Deploying with standard AWS credentials..."
-        kubectl apply -k "$MANIFESTS_DIR/"
-        success "Standard Alpaca arrow cache deployed"
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            log "Deploying with LeaderWorkerSet and standard AWS credentials..."
+            # Create temporary directory for LeaderWorkerSet deployment
+            LWS_TEMP_DIR="/tmp/arrow-cache-alpaca-lws"
+            rm -rf "$LWS_TEMP_DIR"
+            mkdir -p "$LWS_TEMP_DIR"
+            cp "$MANIFESTS_DIR/kustomization-lws.yaml" "$LWS_TEMP_DIR/kustomization.yaml"
+            cp "$MANIFESTS_DIR/namespace.yaml" "$LWS_TEMP_DIR/"
+            cp "$MANIFESTS_DIR/configmap.yaml" "$LWS_TEMP_DIR/"
+            cp "$MANIFESTS_DIR/aws-secret.yaml" "$LWS_TEMP_DIR/"
+            cp "$MANIFESTS_DIR/arrow-cache-leaderworkerset.yaml" "$LWS_TEMP_DIR/"
+            kubectl apply -k "$LWS_TEMP_DIR/"
+            rm -rf "$LWS_TEMP_DIR"
+            success "Alpaca arrow cache deployed using LeaderWorkerSet"
+        else
+            log "Deploying with standard AWS credentials..."
+            kubectl apply -k "$MANIFESTS_DIR/"
+            success "Standard Alpaca arrow cache deployed"
+        fi
     fi
 }
 
 wait_for_pods() {
+    local use_leaderworkerset="$1"
+
     log "Waiting for pods to be ready..."
 
-    # Wait for workers to be ready
-    kubectl wait --for=condition=ready pod -l app=arrow-cache-worker -n arrow-cache-demo --timeout=300s
-    success "Worker pods are ready"
+    if [[ "$use_leaderworkerset" == "true" ]]; then
+        # Wait for LeaderWorkerSet pods to be ready
+        kubectl wait --for=condition=ready pod -l leaderworkerset.sigs.k8s.io/name=arrow-cache-alpaca-lws -n arrow-cache-demo --timeout=300s
+        success "LeaderWorkerSet pods are ready"
+    else
+        # Wait for workers to be ready
+        kubectl wait --for=condition=ready pod -l app=arrow-cache-worker -n arrow-cache-demo --timeout=300s
+        success "Worker pods are ready"
 
-    # Wait for head to be ready
-    kubectl wait --for=condition=ready pod -l app=arrow-cache-head -n arrow-cache-demo --timeout=300s
-    success "Head pod is ready"
+        # Wait for head to be ready
+        kubectl wait --for=condition=ready pod -l app=arrow-cache-head -n arrow-cache-demo --timeout=300s
+        success "Head pod is ready"
+    fi
 }
 
 show_success_info() {
@@ -344,6 +388,7 @@ main() {
     local no_build="false"
     local aws_profile="root-ricardo"
     local iam_role_arn=""
+    local use_leaderworkerset="false"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -363,6 +408,10 @@ main() {
                 iam_role_arn="$2"
                 shift 2
                 ;;
+            --use-leaderworkerset)
+                use_leaderworkerset="true"
+                shift
+                ;;
             --help)
                 show_help
                 exit 0
@@ -376,6 +425,7 @@ main() {
     log "Starting Alpaca Arrow Cache Setup"
     echo "=================================="
     log "Cluster: $cluster_name"
+    log "Deployment Type: $([ "$use_leaderworkerset" == "true" ] && echo "LeaderWorkerSet" || echo "Deployment/StatefulSet")"
     if [ -n "$iam_role_arn" ]; then
         log "AWS IAM Role: $iam_role_arn"
     else
@@ -396,10 +446,10 @@ main() {
     setup_aws_credentials "$aws_profile" "$iam_role_arn"
 
     # Deploy Kubernetes resources
-    deploy_kubernetes_resources "$iam_role_arn"
+    deploy_kubernetes_resources "$iam_role_arn" "$use_leaderworkerset"
 
     # Wait for pods to be ready
-    wait_for_pods
+    wait_for_pods "$use_leaderworkerset"
 
     # Show success information
     show_success_info

@@ -129,18 +129,32 @@ class BaseArrowCacheClient:
             worker_uri = worker_uri.replace("http://", "grpc://", 1)
 
         # Translate internal Kubernetes URIs to localhost port-forwarded URIs
+
+        # StatefulSet worker URIs
         if (
-            f"arrow-cache-worker-0.arrow-cache-worker-svc.{namespace}.svc.cluster.local"
-            in worker_uri
+            f"arrow-cache-worker-0.arrow-cache-worker-svc."
+            f"{namespace}.svc.cluster.local" in worker_uri
         ):
             return "grpc://localhost:50052"  # Port-forward worker-0
         elif (
-            f"arrow-cache-worker-1.arrow-cache-worker-svc.{namespace}.svc.cluster.local"
-            in worker_uri
+            f"arrow-cache-worker-1.arrow-cache-worker-svc."
+            f"{namespace}.svc.cluster.local" in worker_uri
         ):
             return "grpc://localhost:50053"  # Port-forward worker-1
 
-        return worker_uri
+        # LeaderWorkerSet worker URIs
+        else:
+            lws_ns = namespace.replace("arrow-cache-", "")
+            lws_base = f"arrow-cache-{lws_ns}-lws"
+
+            if f"{lws_base}-0-1.{lws_base}.{namespace}.svc.cluster.local" in worker_uri:
+                return "grpc://localhost:50052"  # Port-forward LWS worker-1
+            elif (
+                f"{lws_base}-0-2.{lws_base}.{namespace}.svc.cluster.local" in worker_uri
+            ):
+                return "grpc://localhost:50053"  # Port-forward LWS worker-2
+
+                return worker_uri
 
     def query_workers_for_data(
         self,

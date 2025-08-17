@@ -45,6 +45,7 @@ Options:
   --no-build           Skip Docker image build check
   --aws-profile NAME   AWS profile to use (default: root-ricardo)
   --iam-role ARN       Use IAM role instead of AWS credentials (EKS only, e.g., arn:aws:iam::123456789:role/MyRole)
+  --use-leaderworkerset Use LeaderWorkerSet instead of separate Deployment/StatefulSet
   --help               Show this help message
 
 Examples:
@@ -62,6 +63,12 @@ Examples:
 
   # Use IAM role instead of credentials
   $0 --iam-role arn:aws:iam::120832439621:role/ArrrowDemo
+
+  # Use LeaderWorkerSet deployment pattern
+  $0 --use-leaderworkerset
+
+  # Use LeaderWorkerSet with IAM role
+  $0 --use-leaderworkerset --iam-role arn:aws:iam::120832439621:role/ArrrowDemo
 
 IAM Role Setup:
   To create an IAM role with the required permissions (S3 + Glue), use:
@@ -164,14 +171,32 @@ setup_aws_credentials() {
         rm -rf "$TEMP_OVERLAY_DIR"
         mkdir -p "$TEMP_OVERLAY_DIR"
 
-        # Copy the overlay files
-        cp "$MANIFESTS_DIR/overlays/irsa/"*.yaml "$TEMP_OVERLAY_DIR/"
+        # Choose the right overlay based on deployment type
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            # Copy the LeaderWorkerSet IRSA overlay files
+            cp "$MANIFESTS_DIR/overlays/irsa/kustomization-lws.yaml" "$TEMP_OVERLAY_DIR/kustomization.yaml"
+            cp "$MANIFESTS_DIR/overlays/irsa/lws-patch.yaml" "$TEMP_OVERLAY_DIR/"
+            cp "$MANIFESTS_DIR/overlays/irsa/configmap-lws-patch.yaml" "$TEMP_OVERLAY_DIR/"
+            cp "$MANIFESTS_DIR/overlays/irsa/aws-service-account.yaml" "$TEMP_OVERLAY_DIR/"
 
-        # Create a symlink to the base manifests to avoid absolute path issues
-        ln -sf "$MANIFESTS_DIR" "$TEMP_OVERLAY_DIR/base"
+            # Copy the base manifests to the temp directory (avoid symlink security issues)
+            cp "$MANIFESTS_DIR/namespace.yaml" "$TEMP_OVERLAY_DIR/"
+            cp "$MANIFESTS_DIR/configmap.yaml" "$TEMP_OVERLAY_DIR/"
+            cp "$MANIFESTS_DIR/arrow-cache-leaderworkerset.yaml" "$TEMP_OVERLAY_DIR/"
 
-        # Create a new kustomization.yaml that references the symlinked base
-        cat > "$TEMP_OVERLAY_DIR/kustomization.yaml" <<EOF
+            # Fix relative paths in kustomization.yaml to use local files
+            sed -i.bak 's|../../namespace.yaml|namespace.yaml|g' "$TEMP_OVERLAY_DIR/kustomization.yaml"
+            sed -i.bak 's|../../configmap.yaml|configmap.yaml|g' "$TEMP_OVERLAY_DIR/kustomization.yaml"
+            sed -i.bak 's|../../arrow-cache-leaderworkerset.yaml|arrow-cache-leaderworkerset.yaml|g' "$TEMP_OVERLAY_DIR/kustomization.yaml"
+        else
+            # Copy the traditional deployment IRSA overlay files
+            cp "$MANIFESTS_DIR/overlays/irsa/"*.yaml "$TEMP_OVERLAY_DIR/"
+
+            # Create a symlink to the base manifests to avoid absolute path issues
+            ln -sf "$MANIFESTS_DIR" "$TEMP_OVERLAY_DIR/base"
+
+            # Create a new kustomization.yaml that references the symlinked base
+            cat > "$TEMP_OVERLAY_DIR/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -191,6 +216,7 @@ patches:
     kind: StatefulSet
     name: arrow-cache-worker
 EOF
+        fi
 
         # Substitute the role ARN
         sed -i.bak "s|ROLE_ARN_PLACEHOLDER|$iam_role_arn|g" "$TEMP_OVERLAY_DIR/aws-service-account.yaml"
@@ -236,6 +262,7 @@ EOF
 
 deploy_kubernetes_resources() {
     local iam_role_arn="$1"
+    local use_leaderworkerset="$2"
 
     log "Deploying Kubernetes resources..."
 
@@ -244,15 +271,35 @@ deploy_kubernetes_resources() {
         error "Manifests directory not found: $MANIFESTS_DIR"
     fi
 
-    # Choose deployment method based on IAM role usage
+    # Choose deployment method based on IAM role usage and deployment type
     if [ -n "$iam_role_arn" ]; then
         log "Deploying with IRSA overlay (no AWS credentials in pods)..."
         kubectl apply -k "$TEMP_OVERLAY_DIR/"
-        success "IRSA-enabled IMDB arrow cache deployed"
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            success "IRSA-enabled IMDB arrow cache deployed using LeaderWorkerSet"
+        else
+            success "IRSA-enabled IMDB arrow cache deployed using Deployment/StatefulSet"
+        fi
     else
-        log "Deploying with standard AWS credentials..."
-        kubectl apply -k "$MANIFESTS_DIR/"
-        success "Standard IMDB arrow cache deployed"
+        if [[ "$use_leaderworkerset" == "true" ]]; then
+            log "Deploying with LeaderWorkerSet and standard AWS credentials..."
+            # Create temporary directory for LeaderWorkerSet deployment
+            LWS_TEMP_DIR="/tmp/arrow-cache-imdb-lws"
+            rm -rf "$LWS_TEMP_DIR"
+            mkdir -p "$LWS_TEMP_DIR"
+            cp "$MANIFESTS_DIR/kustomization-lws.yaml" "$LWS_TEMP_DIR/kustomization.yaml"
+            cp "$MANIFESTS_DIR/namespace.yaml" "$LWS_TEMP_DIR/"
+            cp "$MANIFESTS_DIR/configmap.yaml" "$LWS_TEMP_DIR/"
+            cp "$MANIFESTS_DIR/aws-secret.yaml" "$LWS_TEMP_DIR/"
+            cp "$MANIFESTS_DIR/arrow-cache-leaderworkerset.yaml" "$LWS_TEMP_DIR/"
+            kubectl apply -k "$LWS_TEMP_DIR/"
+            rm -rf "$LWS_TEMP_DIR"
+            success "IMDB arrow cache deployed using LeaderWorkerSet"
+        else
+            log "Deploying with standard AWS credentials..."
+            kubectl apply -k "$MANIFESTS_DIR/"
+            success "Standard IMDB arrow cache deployed"
+        fi
     fi
 
     # Clean up temporary overlay directory if used
@@ -262,18 +309,27 @@ deploy_kubernetes_resources() {
 }
 
 wait_for_pods() {
+    local use_leaderworkerset="$1"
+
     log "Waiting for pods to be ready..."
 
-    # Wait for workers to be ready
-    kubectl wait --for=condition=ready pod -l app=arrow-cache-worker -n arrow-cache-imdb --timeout=300s
-    success "Worker pods are ready"
+    if [[ "$use_leaderworkerset" == "true" ]]; then
+        # Wait for LeaderWorkerSet pods to be ready
+        kubectl wait --for=condition=ready pod -l leaderworkerset.sigs.k8s.io/name=arrow-cache-imdb-lws -n arrow-cache-imdb --timeout=300s
+        success "LeaderWorkerSet pods are ready"
+    else
+        # Wait for workers to be ready
+        kubectl wait --for=condition=ready pod -l app=arrow-cache-worker -n arrow-cache-imdb --timeout=300s
+        success "Worker pods are ready"
 
-    # Wait for head to be ready
-    kubectl wait --for=condition=ready pod -l app=arrow-cache-head -n arrow-cache-imdb --timeout=300s
-    success "Head pod is ready"
+        # Wait for head to be ready
+        kubectl wait --for=condition=ready pod -l app=arrow-cache-head -n arrow-cache-imdb --timeout=300s
+        success "Head pod is ready"
+    fi
 }
 
 show_success_info() {
+    local use_leaderworkerset="$1"
     echo
     success "IMDB Arrow Cache Demo deployed successfully!"
     echo
@@ -285,15 +341,26 @@ show_success_info() {
     echo
     echo "1. Set up port forwarding to access the services:"
     echo "   kubectl port-forward -n arrow-cache-imdb service/arrow-cache-head-svc 50051:50051 &"
-    echo "   kubectl port-forward -n arrow-cache-imdb arrow-cache-worker-0 50052:50051 &"
-    echo "   kubectl port-forward -n arrow-cache-imdb arrow-cache-worker-1 50053:50051 &"
+    if [[ "$use_leaderworkerset" == "true" ]]; then
+        echo "   kubectl port-forward -n arrow-cache-imdb arrow-cache-imdb-lws-0-1 50052:50051 &"
+        echo "   kubectl port-forward -n arrow-cache-imdb arrow-cache-imdb-lws-0-2 50053:50051 &"
+    else
+        echo "   kubectl port-forward -n arrow-cache-imdb arrow-cache-worker-0 50052:50051 &"
+        echo "   kubectl port-forward -n arrow-cache-imdb arrow-cache-worker-1 50053:50051 &"
+    fi
     echo
     echo "2. Run the IMDB demo client:"
     echo "   python3 demo/scripts/imdb/demo-client.py --demo"
     echo
     echo "3. Monitor logs:"
-    echo "   kubectl logs -f -n arrow-cache-imdb deployment/arrow-cache-head"
-    echo "   kubectl logs -f -n arrow-cache-imdb statefulset/arrow-cache-worker"
+    if [[ "$use_leaderworkerset" == "true" ]]; then
+        echo "   kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0-0  # Head pod"
+        echo "   kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0-1  # Worker pod 1"
+        echo "   kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0-2  # Worker pod 2"
+    else
+        echo "   kubectl logs -f -n arrow-cache-imdb deployment/arrow-cache-head"
+        echo "   kubectl logs -f -n arrow-cache-imdb statefulset/arrow-cache-worker"
+    fi
     echo
     echo "4. Clean up when done:"
     echo "   ./demo/scripts/imdb/cleanup-imdb-arrow-cache.sh"
@@ -312,6 +379,7 @@ main() {
     local no_build="false"
     local aws_profile="root-ricardo"
     local iam_role_arn=""
+    local use_leaderworkerset="false"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -331,6 +399,10 @@ main() {
                 iam_role_arn="$2"
                 shift 2
                 ;;
+            --use-leaderworkerset)
+                use_leaderworkerset="true"
+                shift
+                ;;
             --help)
                 show_help
                 exit 0
@@ -344,6 +416,7 @@ main() {
     log "Starting IMDB Arrow Cache Setup"
     echo "================================="
     log "Cluster: $cluster_name"
+    log "Deployment Type: $([ "$use_leaderworkerset" == "true" ] && echo "LeaderWorkerSet" || echo "Deployment/StatefulSet")"
     if [ -n "$iam_role_arn" ]; then
         log "AWS IAM Role: $iam_role_arn"
     else
@@ -364,13 +437,13 @@ main() {
     setup_aws_credentials "$aws_profile" "$iam_role_arn"
 
     # Deploy Kubernetes resources
-    deploy_kubernetes_resources "$iam_role_arn"
+    deploy_kubernetes_resources "$iam_role_arn" "$use_leaderworkerset"
 
     # Wait for pods to be ready
-    wait_for_pods
+    wait_for_pods "$use_leaderworkerset"
 
     # Show success information
-    show_success_info
+    show_success_info "$use_leaderworkerset"
 }
 
 # Run main function if script is executed directly

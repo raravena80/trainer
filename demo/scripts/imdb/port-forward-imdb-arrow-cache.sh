@@ -29,6 +29,20 @@ if ! kubectl get pods -n arrow-cache-imdb | grep -q "Running"; then
     exit 1
 fi
 
+# Detect deployment type
+echo "🔍 Detecting deployment type..."
+if kubectl get leaderworkerset arrow-cache-imdb-lws -n arrow-cache-imdb &> /dev/null; then
+    deployment_type="lws"
+    echo "📋 Detected: LeaderWorkerSet deployment"
+    worker1_pod="arrow-cache-imdb-lws-0-1"
+    worker2_pod="arrow-cache-imdb-lws-0-2"
+else
+    deployment_type="statefulset"
+    echo "📋 Detected: StatefulSet deployment"
+    worker1_pod="arrow-cache-worker-0"
+    worker2_pod="arrow-cache-worker-1"
+fi
+
 # Kill any existing port-forward processes
 echo "🔌 Stopping existing port-forward processes..."
 pkill -f "kubectl port-forward.*arrow-cache-imdb" || true
@@ -68,14 +82,14 @@ if ! start_port_forward "service/arrow-cache-head-svc" "50051" "50051" "Head Ser
 fi
 
 # Port forward worker-0
-if ! start_port_forward "arrow-cache-worker-0" "50052" "50051" "Worker-0"; then
-    echo "❌ Failed to set up worker-0 port forward"
+if ! start_port_forward "$worker1_pod" "50052" "50051" "Worker-1"; then
+    echo "❌ Failed to set up worker-1 port forward"
     exit 1
 fi
 
 # Port forward worker-1
-if ! start_port_forward "arrow-cache-worker-1" "50053" "50051" "Worker-1"; then
-    echo "❌ Failed to set up worker-1 port forward"
+if ! start_port_forward "$worker2_pod" "50053" "50051" "Worker-2"; then
+    echo "❌ Failed to set up worker-2 port forward"
     exit 1
 fi
 
@@ -84,15 +98,21 @@ echo "✅ Port forwarding setup complete!"
 echo ""
 echo "📡 Active port forwards:"
 echo "  Head Service:  localhost:50051 -> arrow-cache-head-svc:50051"
-echo "  Worker-0:      localhost:50052 -> arrow-cache-worker-0:50051"
-echo "  Worker-1:      localhost:50053 -> arrow-cache-worker-1:50051"
+echo "  Worker-1:      localhost:50052 -> $worker1_pod:50051"
+echo "  Worker-2:      localhost:50053 -> $worker2_pod:50051"
 echo ""
 echo "🎯 Now you can run the demo client:"
 echo "  python3 demo/scripts/imdb/demo-client.py --demo"
 echo ""
 echo "📊 Monitor logs with:"
-echo "  kubectl logs -f -n arrow-cache-imdb deployment/arrow-cache-head"
-echo "  kubectl logs -f -n arrow-cache-imdb statefulset/arrow-cache-worker"
+if [[ "$deployment_type" == "lws" ]]; then
+    echo "  kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0-0  # Head pod"
+    echo "  kubectl logs -f -n arrow-cache-imdb $worker1_pod  # Worker pod 1"
+    echo "  kubectl logs -f -n arrow-cache-imdb $worker2_pod  # Worker pod 2"
+else
+    echo "  kubectl logs -f -n arrow-cache-imdb deployment/arrow-cache-head"
+    echo "  kubectl logs -f -n arrow-cache-imdb statefulset/arrow-cache-worker"
+fi
 echo ""
 echo "⚡ To stop port forwarding, press Ctrl+C or run:"
 echo "  pkill -f 'kubectl port-forward.*arrow-cache-imdb'"
