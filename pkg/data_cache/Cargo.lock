@@ -388,6 +388,7 @@ dependencies = [
  "iceberg-datafusion",
  "object_store",
  "serde",
+ "serde_json",
  "tokio",
  "tonic",
  "tracing",
