@@ -31,33 +31,45 @@ The demo specifically showcases:
 ### Demo Environment Setup
 ```bash
 # Create conda environment
-conda env create -f demo/environment.yml
+conda env create -f environment.yml
 conda activate arrow-cache-demo
 
-# Setup Kind cluster and deploy Arrow Cache
-./demo/scripts/setup-kind/setup-kind-cluster.sh
-./demo/scripts/regular/setup-arrow-cache.sh
+# Setup Kind cluster with IRSA support
+./scripts/setup-kind/setup-kind-cluster.sh --enable-irsa
 
-# Configure AWS credentials (for S3 integration)
-./demo/scripts/setup-kind/create-service-accounts.sh
+# Deploy Arrow Cache for specific demo type
+./scripts/setup-kind/irsa/arrow-cache-example.sh --demo-type regular
+
+# Alternative: Use generic training system (recommended)
+./scripts/generic/setup-generic-training.sh \
+  --dataset-name imdb \
+  --dataset-config scripts/generic/configs/imdb.yaml \
+  --use-arrow-cache \
+  --use-irsa
 ```
 
 ### Arrow Cache Demo Commands
 ```bash
-# Quick demo setup
-./demo/scripts/regular/setup-arrow-cache.sh
-./demo/scripts/regular/demo-arrow-cache-status.sh
-python3 demo/scripts/regular/demo-arrow-cache-client.py --demo
+# Generic training system (recommended approach)
+./scripts/generic/setup-generic-training.sh \
+  --dataset-name imdb \
+  --dataset-config scripts/generic/configs/imdb.yaml \
+  --use-arrow-cache \
+  --use-irsa
 
-# IMDB dataset demo
-./demo/scripts/imdb/setup-imdb-arrow-cache.sh
-./demo/scripts/imdb/port-forward-imdb-arrow-cache.sh
-python3 demo/scripts/imdb/demo-imdb-arrow-cache-client.py
+# Dataset-specific demos
+./scripts/regular/setup-arrow-cache.sh
+./scripts/regular/demo-arrow-cache-status.sh
+python3 scripts/regular/demo-client.py --demo
 
-# Alpaca training demo
-./demo/scripts/alpaca/setup-alpaca-arrow-cache.sh
-./demo/scripts/alpaca/port-forward-alpaca-arrow-cache.sh
-python3 demo/scripts/alpaca/alpaca_training.py
+# IMDB sentiment classification
+./scripts/imdb/setup-imdb-arrow-cache.sh --use-irsa
+python3 scripts/imdb/demo-client.py --demo
+python3 scripts/imdb/imdb_training.py --use-arrow-cache --use-irsa
+
+# Alpaca instruction following
+./scripts/alpaca/setup-alpaca-arrow-cache.sh --use-irsa
+python3 scripts/alpaca/alpaca_training.py --use-arrow-cache --use-irsa
 ```
 
 ### Parent Project (Go-based) Commands
@@ -87,13 +99,14 @@ make helm-unittest # Run Helm unit tests
 
 ### Cleanup Commands
 ```bash
-# Clean up demo resources
-./demo/scripts/regular/cleanup-arrow-cache.sh
-./demo/scripts/imdb/cleanup-imdb-arrow-cache.sh
-./demo/scripts/alpaca/cleanup-alpaca-arrow-cache.sh
+# Clean up specific demo resources
+./scripts/regular/cleanup-arrow-cache.sh
+./scripts/imdb/cleanup-imdb-arrow-cache.sh
+./scripts/alpaca/cleanup-alpaca-arrow-cache.sh
 
-# Delete Kind cluster
+# Complete cleanup with IRSA resources
 kind delete cluster --name arrow-cache-demo
+./scripts/setup-kind/irsa/cleanup-irsa.sh --cluster-name arrow-cache-demo
 ```
 
 ## Code Structure
@@ -103,15 +116,17 @@ kind delete cluster --name arrow-cache-demo
 demo/
 ├── scripts/           # Deployment and demo scripts
 │   ├── lib/          # Shared Python libraries
+│   ├── generic/      # Universal training system (⭐ Recommended)
+│   ├── setup-kind/   # Kind cluster and IRSA setup
 │   ├── regular/      # Standard Arrow Cache demos
 │   ├── imdb/         # IMDB dataset-specific demos
-│   ├── alpaca/       # Alpaca training demos
-│   └── setup-kind/   # Kind cluster setup scripts
+│   └── alpaca/       # Alpaca training demos
 ├── manifests/        # Kubernetes deployment manifests
 │   ├── arrow-cache/       # Base Arrow Cache deployment
 │   ├── arrow-cache-imdb/  # IMDB-specific configuration
 │   └── arrow-cache-alpaca/# Alpaca-specific configuration
-└── docs/             # Demo documentation
+├── docs/             # Demo documentation
+└── ingest_hf_dataset_to_s3_iceberg.py  # HuggingFace dataset ingestion
 ```
 
 ### Parent Project Structure
@@ -134,9 +149,10 @@ trainer/
 ## Important Technical Details
 
 ### Demo-Specific APIs
-- **Arrow Cache Client** (`demo/scripts/lib/arrow_cache_client.py`): Core client for interacting with distributed cache
-- **Demo Data Generation** (`demo/scripts/regular/generate-demo-data.py`): Synthetic dataset creation
-- **Iceberg Integration** (`demo/create_proper_iceberg_table.py`): Apache Iceberg table management
+- **Arrow Cache Client** (`scripts/lib/arrow_cache_client.py`): Core client for interacting with distributed cache
+- **Generic Training System** (`scripts/generic/generic_training.py`): Universal training pipeline supporting any dataset
+- **Demo Data Generation** (`scripts/regular/generate-demo-data.py`): Synthetic dataset creation
+- **HuggingFace Integration** (`ingest_hf_dataset_to_s3_iceberg.py`): HuggingFace to Iceberg data pipeline
 
 ### Core Trainer APIs
 - **TrainJob** (`pkg/apis/trainer/v1alpha1/trainjob_types.go`): Main training job specification
@@ -197,10 +213,12 @@ trainer/
 
 ### Important Demo Files
 - `setup-*.sh`: Deployment and configuration scripts
-- `demo-*-client.py`: Client applications for testing
+- `demo-client.py` / `*_training.py`: Client applications and training scripts
 - `*-arrow-cache.sh`: Arrow Cache specific operations
 - `cleanup-*.sh`: Resource cleanup scripts
-- `port-forward-*.sh`: Local access setup
+- `generic_training.py`: Universal training script for any dataset
+- `configs/*.yaml`: Dataset configuration files
+- `arrow-cache-example.sh`: One-command IRSA + Arrow Cache deployment
 
 ### Important Project Files
 - `*_types.go`: Kubernetes API type definitions
