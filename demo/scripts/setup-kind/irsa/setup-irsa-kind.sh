@@ -304,7 +304,8 @@ show_success_info() {
     echo "     --role-name ArrowCacheRole \\"
     echo "     --namespace arrow-cache-imdb \\"
     echo "     --service-account aws-service-account \\"
-    echo "     --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess"
+    echo "     --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess \\"
+    echo "     --policy-arn arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
     echo
     echo "2. Use IAM roles in your Arrow Cache demos:"
     echo "   ./setup-imdb-arrow-cache.sh --iam-role arn:aws:iam::$ACCOUNT_ID:role/ArrowCacheRole"

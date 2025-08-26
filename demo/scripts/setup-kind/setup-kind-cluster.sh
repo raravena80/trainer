@@ -257,6 +257,7 @@ create_namespace_service_accounts() {
             --namespace "${namespaces[0]}" \
             --service-account "$service_account" \
             --policy-arn "arn:aws:iam::aws:policy/AmazonS3FullAccess" \
+            --policy-arn "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole" \
             --skip-k8s-creation \
             --use-wildcard
         local create_role_exit_code=$?
