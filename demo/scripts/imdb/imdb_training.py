@@ -507,7 +507,7 @@ def main():
             catalog = GlueCatalog(
                 name="glue", warehouse=WAREHOUSE_S3, region_name=AWS_REGION
             )
-            table = catalog.load_table(f"{GLUE_DB}.imdb")
+            table = catalog.load_table(f"{GLUE_DB}.imdb_reviews")
 
             scan = table.scan()
             arrow_data = scan.to_arrow()
@@ -531,7 +531,7 @@ def main():
         catalog = GlueCatalog(
             name="glue", warehouse=WAREHOUSE_S3, region_name=AWS_REGION
         )
-        table = catalog.load_table(f"{GLUE_DB}.imdb")
+        table = catalog.load_table(f"{GLUE_DB}.imdb_reviews")
 
         scan = table.scan()
         arrow_data = scan.to_arrow()

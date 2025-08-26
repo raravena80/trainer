@@ -7,7 +7,8 @@ spec:
   runtimeRef:
     name: torch-simple
   trainer:
-    image: python:3.11-slim
+    #image: python:3.11-slim
+    image: raravena80/torchtraining:latest
     command:
       - /bin/bash
       - -c

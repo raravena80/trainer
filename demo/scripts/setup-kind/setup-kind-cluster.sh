@@ -173,6 +173,7 @@ nodes:
 - role: worker
 - role: worker
 - role: worker
+- role: worker
 EOF
 
         kind create cluster --name "$CLUSTER_NAME" --config /tmp/kind-config.yaml
@@ -251,7 +252,13 @@ create_namespace_service_accounts() {
             role_create_env="$role_create_env AWS_PROFILE=$AWS_PROFILE"
         fi
 
-        env $role_create_env bash "$create_role_script" \
+
+        # Check if role already exists first
+        if aws iam get-role --role-name "$role_name" >/dev/null 2>&1; then
+            log "IAM role $role_name already exists, skipping creation"
+            local create_role_exit_code=0
+        else
+            env $role_create_env bash "$create_role_script" \
             --cluster-config "$cluster_config" \
             --role-name "$role_name" \
             --namespace "${namespaces[0]}" \
@@ -260,7 +267,7 @@ create_namespace_service_accounts() {
             --policy-arn "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole" \
             --skip-k8s-creation \
             --use-wildcard
-        local create_role_exit_code=$?
+        fi
         set -e  # Re-enable exit on error
 
         if [ $create_role_exit_code -eq 0 ]; then
