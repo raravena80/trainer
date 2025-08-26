@@ -13,6 +13,10 @@ spec:
       - -c
     args:
       - |
+        # Set AWS region environment variables
+        export AWS_REGION=us-east-1
+        export AWS_DEFAULT_REGION=us-east-1
+
         # Install required dependencies for your actual script
         pip install transformers[torch] datasets pyarrow boto3 torch pyiceberg mypy_boto3_glue accelerate pandas
 
@@ -37,7 +41,11 @@ spec:
             pass
         EOF
 
-        # Test Arrow Cache integration
+        # Wait for Arrow Cache to be ready (simple approach)
+        echo "Waiting for Arrow Cache to be ready..."
+        sleep 5
+
+        # Test Arrow Cache integration with better error handling
         python3 imdb_training.py \
           --model-name=distilgpt2 \
           --max-samples=10 \

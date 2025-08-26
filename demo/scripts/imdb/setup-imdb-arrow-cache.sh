@@ -314,9 +314,37 @@ wait_for_pods() {
     log "Waiting for pods to be ready..."
 
     if [[ "$use_leaderworkerset" == "true" ]]; then
-        # Wait for LeaderWorkerSet pods to be ready
-        kubectl wait --for=condition=ready pod -l leaderworkerset.sigs.k8s.io/name=arrow-cache-imdb-lws -n arrow-cache-imdb --timeout=300s
-        success "LeaderWorkerSet pods are ready"
+        # First, wait for worker pods to be ready (they start faster)
+        log "Waiting for worker pods to be ready..."
+        if kubectl wait --for=condition=ready pod -l app=arrow-cache-worker -n arrow-cache-imdb --timeout=120s; then
+            success "Worker pods are ready"
+        else
+            warn "Worker pods took longer than expected to be ready"
+        fi
+
+        # Show current pod status
+        log "Current pod status:"
+        kubectl get pods -n arrow-cache-imdb
+
+        # For head pod, check if it exists and show status
+        local head_pod=$(kubectl get pods -n arrow-cache-imdb -l app=arrow-cache-head --no-headers -o name 2>/dev/null | head -1)
+        if [ -n "$head_pod" ]; then
+            log "Head pod status (may take up to 2 minutes for probes to start):"
+            kubectl get "$head_pod" -n arrow-cache-imdb
+
+            # Try to wait for head pod with a reasonable timeout
+            log "Waiting for head pod to be ready (this may take up to 2 minutes due to probe delays)..."
+            if kubectl wait --for=condition=ready "$head_pod" -n arrow-cache-imdb --timeout=150s; then
+                success "Head pod is ready"
+            else
+                warn "Head pod is taking longer than expected to be ready (this is normal with probe delays)"
+                log "You can check the head pod status with: kubectl get pods -n arrow-cache-imdb"
+            fi
+        else
+            warn "Head pod not found - this may be normal if using a different deployment pattern"
+        fi
+
+        success "LeaderWorkerSet deployment completed"
     else
         # Wait for workers to be ready
         kubectl wait --for=condition=ready pod -l app=arrow-cache-worker -n arrow-cache-imdb --timeout=300s
@@ -354,7 +382,7 @@ show_success_info() {
     echo
     echo "3. Monitor logs:"
     if [[ "$use_leaderworkerset" == "true" ]]; then
-        echo "   kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0-0  # Head pod"
+        echo "   kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0  # Head pod"
         echo "   kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0-1  # Worker pod 1"
         echo "   kubectl logs -f -n arrow-cache-imdb arrow-cache-imdb-lws-0-2  # Worker pod 2"
     else

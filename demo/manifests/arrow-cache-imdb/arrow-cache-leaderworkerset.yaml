@@ -16,6 +16,7 @@ spec:
           app: arrow-cache-head
           component: head
       spec:
+        serviceAccountName: aws-service-account
         containers:
         - name: head
           image: arrow-cache-demo:latest
@@ -72,24 +73,6 @@ spec:
               configMapKeyRef:
                 name: arrow-cache-config
                 key: AWS_REGION
-          - name: AWS_ACCESS_KEY_ID
-            valueFrom:
-              secretKeyRef:
-                name: aws-credentials
-                key: AWS_ACCESS_KEY_ID
-                optional: false
-          - name: AWS_SECRET_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: aws-credentials
-                key: AWS_SECRET_ACCESS_KEY
-                optional: false
-          - name: AWS_SESSION_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: aws-credentials
-                key: AWS_SESSION_TOKEN
-                optional: true
           volumeMounts:
           - name: worker-config
             mountPath: /etc/arrow-cache
@@ -104,13 +87,15 @@ spec:
           livenessProbe:
             tcpSocket:
               port: 50051
-            initialDelaySeconds: 30
+            initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
             tcpSocket:
               port: 50051
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
         volumes:
         - name: worker-config
           configMap:
@@ -122,6 +107,7 @@ spec:
           app: arrow-cache-worker
           component: worker
       spec:
+        serviceAccountName: aws-service-account
         containers:
         - name: worker
           image: arrow-cache-demo:latest
@@ -163,24 +149,6 @@ spec:
               configMapKeyRef:
                 name: arrow-cache-config
                 key: AWS_REGION
-          - name: AWS_ACCESS_KEY_ID
-            valueFrom:
-              secretKeyRef:
-                name: aws-credentials
-                key: AWS_ACCESS_KEY_ID
-                optional: true
-          - name: AWS_SECRET_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: aws-credentials
-                key: AWS_SECRET_ACCESS_KEY
-                optional: true
-          - name: AWS_SESSION_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: aws-credentials
-                key: AWS_SESSION_TOKEN
-                optional: true
           resources:
             requests:
               memory: "512Mi"

@@ -88,11 +88,13 @@ spec:
               port: 50051
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
             tcpSocket:
               port: 50051
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
     workerTemplate:
       metadata:
         labels:
