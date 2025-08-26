@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::info;
+use tracing::{info, error};
 
 /// Head node service implementing Apache Arrow Flight protocol for distributed query coordination.
 ///
@@ -125,6 +125,31 @@ impl HeadService {
     pub fn new(distributor: Distributor) -> Self {
         Self { distributor }
     }
+
+    /// Try to get the total row count from the memtable if it exists
+    async fn get_total_row_count(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        use arrow::array::UInt64Array;
+        use datafusion::error::DataFusionError;
+
+        let df = self.distributor.context()
+            .sql("SELECT MAX(row_end_indexes) AS max FROM memtable")
+            .await?;
+        let results = df.collect().await?;
+
+        if let Some(batch) = results.first() {
+            let column = batch.column(0);
+            let max_value = column
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("Failed to downcast to UInt64Array".to_string())
+                })?
+                .value(0);
+            Ok((max_value + 1) as usize)
+        } else {
+            Err("No rows found in memtable".into())
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -226,8 +251,23 @@ impl FlightService for HeadService {
         let local_rank_parsed = local_rank
             .parse()
             .map_err(|_| Status::invalid_argument("Invalid local_rank value"))?;
+
+        // Get the current total row count (may need to initialize it)
+        let total_row_count = if self.distributor.total_row_count == 0 {
+            // Try to get row count from memtable if available
+            match self.get_total_row_count().await {
+                Ok(count) => count,
+                Err(_) => {
+                    info!("Total row count not yet available, returning empty endpoints");
+                    0
+                }
+            }
+        } else {
+            self.distributor.total_row_count as usize
+        };
+
         let workers = if let Some((start, end)) = get_partition_range(
-            self.distributor.total_row_count as usize,
+            total_row_count,
             total_parsed,
             local_rank_parsed,
         ) {
@@ -398,17 +438,57 @@ pub async fn run(
         let clean_uri = worker_uri.strip_prefix("http://").unwrap_or(&worker_uri);
         worker_map.insert(index.to_string(), format!("grpc://{clean_uri}"));
     }
+    let provider_arc = Arc::new(provider);
+    let worker_map_arc = Arc::new(worker_map);
+
     let mut distributor = Distributor::new(
+        ctx.clone(),
+        num_workers,
+        provider_arc.clone(),
+        "memtable".to_string(),
+        worker_map_arc.clone(),
+        metadata_schema.clone(),
+        cache_config.clone(),
+    );
+
+    // Only do minimal initialization (fetch data files) without distributing
+    info!("🚀 Starting minimal initialization (gRPC server will start immediately)");
+    let _ = distributor.fetch_data_files().await;
+    info!("✅ Minimal initialization completed, starting gRPC server");
+
+    // Start background distribution task
+    tokio::spawn(async move {
+        info!("🚀 Starting background data distribution");
+
+        // Add delay to allow gRPC server to start and workers to be ready
+        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+        match distributor.distribute_and_setup().await {
+            Ok(_) => {
+                info!("✅ Background data distribution completed successfully");
+            }
+            Err(e) => {
+                error!("❌ Background data distribution failed: {}", e);
+                // Continue running even if distribution fails - periodic retries will handle it
+            }
+        }
+    });
+
+    info!("🌐 Starting gRPC server on {} (data distribution will happen in background)", addr);
+    let mut service_distributor = Distributor::new(
         ctx,
         num_workers,
-        Arc::new(provider),
+        provider_arc,
         "memtable".to_string(),
-        Arc::new(worker_map),
-        metadata_arrow_schema(),
+        worker_map_arc,
+        metadata_schema,
         cache_config,
     );
-    let _ = distributor.init().await;
-    let service = HeadService { distributor };
+
+    // Initialize the service distributor's memtable so it can handle flight info requests
+    let _ = service_distributor.fetch_data_files().await;
+
+    let service = HeadService { distributor: service_distributor };
     tonic::transport::Server::builder()
         .add_service(FlightServiceServer::new(service))
         .serve(addr)

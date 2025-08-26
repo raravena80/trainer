@@ -52,6 +52,10 @@ impl Distributor {
         }
     }
 
+    pub fn context(&self) -> Arc<SessionContext> {
+        self.ctx.clone()
+    }
+
     pub async fn init(&mut self) -> Result<()> {
         let _ = self.fetch_data_files().await;
         let df = self
@@ -118,7 +122,7 @@ impl Distributor {
         Ok(string_results)
     }
 
-    async fn fetch_data_files(&self) -> Result<()> {
+    pub async fn fetch_data_files(&mut self) -> Result<()> {
         let memtable = MemTable::load(
             self.data_file_provider.clone(),
             Some(self.num_workers),
@@ -135,6 +139,36 @@ impl Distributor {
                 error!("Failed to register table: {}", err);
                 err
             })?;
+        Ok(())
+    }
+
+    pub async fn distribute_and_setup(&mut self) -> Result<()> {
+        // Calculate total row count first
+        let df = self
+            .ctx
+            .sql("SELECT MAX(row_end_indexes) AS max FROM memtable")
+            .await?;
+        let results = df.collect().await?;
+
+        if let Some(batch) = results.first() {
+            let column = batch.column(0);
+            let max_value = column
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("Failed to downcast to UInt64Array".to_string())
+                })?
+                .value(0);
+            self.total_row_count = (max_value + 1) as i64;
+            info!("Total num of rows: {}", self.total_row_count);
+        }
+
+        // Distribute data to workers
+        self.distribute_data_files().await?;
+
+        // Start periodic retry task if configured
+        self.start_periodic_retry_task().await;
+
         Ok(())
     }
 

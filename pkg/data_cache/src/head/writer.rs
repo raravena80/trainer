@@ -551,7 +551,7 @@ impl ExecutorClient {
         let connection = tonic::transport::Endpoint::new(addr.clone())
             .map_err(|e| DataFusionError::Execution(format!("Failed to create endpoint: {}", e)))?
             .connect_timeout(connect_timeout)
-            .timeout(Duration::from_secs(60)) //TODO: fix timeout to not allowing closing connection
+            .timeout(Duration::from_secs(300)) // Increased timeout for large data transfers
             .connect()
             .await
             .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
