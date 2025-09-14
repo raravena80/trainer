@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-config
+  namespace: arrow-cache-imdb
+data:
+  METADATA_LOC: "s3://ricardo.hf.datasets/iceberg/hf_datasets.db/imdb_reviews/metadata/00003-132588d1-594d-4b12-99b1-d912667bba51.metadata.json"
+  TABLE_NAME: "imdb_reviews"
+  SCHEMA_NAME: "hf_datasets"
+  RUST_LOG: "info"
+  WORKER_RUNTIME: "KUBERNETES"
+  LWS_GROUP_SIZE: "2"
+  WORKER_SERVICE_NAME: "arrow-cache-imdb-lws"
+  NAMESPACE: "arrow-cache-imdb"
+  # AWS Configuration for IRSA (no AWS_PROFILE needed)
+  AWS_REGION: "us-east-1"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-worker-map
+  namespace: arrow-cache-imdb
+data:
+  worker-mapping.json: |
+    {
+      "workers": [
+        {
+          "host": "arrow-cache-imdb-lws-0-1.arrow-cache-imdb-lws.arrow-cache-imdb.svc.cluster.local",
+          "port": 50051
+        },
+        {
+          "host": "arrow-cache-imdb-lws-0-2.arrow-cache-imdb-lws.arrow-cache-imdb.svc.cluster.local",
+          "port": 50051
+        }
+      ]
+    }

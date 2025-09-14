@@ -1,0 +1,80 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: imdb-training-real
+  namespace: arrow-cache-imdb
+spec:
+  runtimeRef:
+    name: torch-simple
+  trainer:
+    #image: python:3.11-slim
+    image: raravena80/torchtraining:latest
+    command:
+      - /bin/bash
+      - -c
+    args:
+      - |
+        # Set AWS region environment variables
+        export AWS_REGION=us-east-1
+        export AWS_DEFAULT_REGION=us-east-1
+
+        # Install required dependencies for your actual script
+        pip install transformers[torch] datasets pyarrow boto3 torch pyiceberg mypy_boto3_glue accelerate pandas
+
+        # Create working directory and copy the mounted scripts (follow symlinks)
+        mkdir -p /app
+        cp -rL /scripts/* /app/
+        cd /app
+
+        # Create lib directory and add required modules
+        mkdir -p /app/lib
+        cat > /app/lib/__init__.py << 'EOF'
+        # Arrow Cache Demo Library
+        EOF
+
+        # Create stub arrow_cache_client to prevent import errors
+        cat > /app/lib/arrow_cache_client.py << 'EOF'
+        class BaseArrowCacheClient:
+            def __init__(self, host="localhost", port=50051):
+                pass
+
+        class S3Utils:
+            pass
+        EOF
+
+        # Wait for Arrow Cache to be ready (simple approach)
+        echo "Waiting for Arrow Cache to be ready..."
+        sleep 5
+
+        # Test Arrow Cache integration with better error handling
+        python3 imdb_training.py \
+          --model-name=distilgpt2 \
+          --max-samples=10 \
+          --skip-checkpoint \
+          --use-irsa \
+          --use-arrow-cache \
+          --head-host=arrow-cache-head-svc.arrow-cache-imdb.svc.cluster.local \
+          --head-port=50051 \
+          --in-cluster
+    numNodes: 1
+    resourcesPerNode:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "1"
+        memory: "4Gi"
+  podSpecOverrides:
+    - targetJobs:
+        - name: node
+      serviceAccountName: aws-service-account
+      volumes:
+        - name: training-scripts
+          configMap:
+            name: imdb-training-script
+      containers:
+        - name: node
+          volumeMounts:
+            - name: training-scripts
+              mountPath: /scripts
+              readOnly: true

@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-config
+  namespace: arrow-cache-demo
+data:
+  METADATA_LOC: "s3://ricardo.hf.datasets/iceberg/hf_datasets.db/tatsu-lab_alpaca/metadata/00001-96f667f1-e205-423e-bdbb-299c70bf3d40.metadata.json"
+  TABLE_NAME: "tatsu-lab_alpaca"
+  SCHEMA_NAME: "hf_datasets"
+  RUST_LOG: "info"
+  WORKER_RUNTIME: "KUBERNETES"
+  LWS_GROUP_SIZE: "2"
+  WORKER_SERVICE_NAME: "arrow-cache-worker-svc"
+  NAMESPACE: "arrow-cache-demo"
+  # AWS Configuration
+  AWS_REGION: "us-east-1"
+  AWS_PROFILE: "root-ricardo"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arrow-cache-worker-map
+  namespace: arrow-cache-demo
+data:
+  worker-mapping.json: |
+    {
+      "workers": [
+        {
+          "host": "arrow-cache-worker-0.arrow-cache-worker-svc.arrow-cache-demo.svc.cluster.local",
+          "port": 50051
+        },
+        {
+          "host": "arrow-cache-worker-1.arrow-cache-worker-svc.arrow-cache-demo.svc.cluster.local",
+          "port": 50051
+        }
+      ]
+    }

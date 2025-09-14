@@ -1,0 +1,89 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: alpaca-training-real
+  namespace: arrow-cache-demo
+spec:
+  # Use the torch-distributed runtime for Hugging Face Transformers
+  runtimeRef:
+    name: torch-distributed
+
+  # Configure the training setup
+  trainer:
+    image: python:3.11-slim
+    command:
+      - /bin/bash
+      - -c
+    args:
+      - |
+        # Install required dependencies for your actual script
+        pip install transformers datasets pyarrow boto3 torch pyiceberg mypy_boto3_glue
+
+        # Create working directory and copy the mounted scripts (follow symlinks)
+        mkdir -p /app
+        cp -rL /scripts/* /app/
+        cd /app
+
+        # Create lib directory and add required modules
+        mkdir -p /app/lib
+        cat > /app/lib/__init__.py << 'EOF'
+        # Arrow Cache Demo Library
+        EOF
+
+        # Create stub arrow_cache_client to prevent import errors
+        cat > /app/lib/arrow_cache_client.py << 'EOF'
+        class BaseArrowCacheClient:
+            def __init__(self, host="localhost", port=50051):
+                pass
+
+        class S3Utils:
+            pass
+        EOF
+
+        # Test Arrow Cache integration
+        python3 alpaca_training.py \
+          --model-name=distilgpt2 \
+          --max-samples=10 \
+          --skip-checkpoint \
+          --use-irsa \
+          --use-arrow-cache \
+          --head-host=arrow-cache-head-svc.arrow-cache-demo.svc.cluster.local \
+          --head-port=50051 \
+          --in-cluster
+    env:
+      # Arrow Cache connection
+      - name: ARROW_CACHE_HEAD_HOST
+        value: "arrow-cache-head-svc.arrow-cache-demo.svc.cluster.local"
+      - name: ARROW_CACHE_HEAD_PORT
+        value: "50051"
+      # AWS credentials (via IRSA)
+      - name: AWS_DEFAULT_REGION
+        value: "us-east-1"
+      # Disable tokenizers parallelism warning
+      - name: TOKENIZERS_PARALLELISM
+        value: "false"
+    # Single-node training
+    numNodes: 1
+    resourcesPerNode:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "1"
+        memory: "4Gi"
+
+  # Override pod spec to use IRSA service account and mount your scripts
+  podSpecOverrides:
+    - targetJobs:
+        - name: node
+      serviceAccountName: aws-service-account
+      volumes:
+        - name: training-scripts
+          configMap:
+            name: alpaca-training-script
+      containers:
+        - name: node
+          volumeMounts:
+            - name: training-scripts
+              mountPath: /scripts
+              readOnly: true

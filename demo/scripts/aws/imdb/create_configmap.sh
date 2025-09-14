@@ -1,0 +1,1 @@
+kubectl create configmap imdb-training-script -n arrow-cache-imdb --from-file=imdb_training.py=imdb_training.py --from-file=arrow_cache_client.py=../lib/arrow_cache_client.py --from-file=__init__.py=/dev/null --dry-run=client -o yaml > imdb-training-configmap-updated.yaml

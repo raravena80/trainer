@@ -1,0 +1,50 @@
+# Custom Dataset Configuration Template
+# Copy this file and modify for your specific dataset
+
+dataset_name: "my-custom-dataset"
+description: "Description of your custom dataset"
+
+# Arrow Cache configuration
+namespace: "arrow-cache-custom"  # Kubernetes namespace where Arrow Cache is deployed
+num_partitions: 4  # Number of data partitions in Arrow Cache
+
+# Iceberg configuration
+iceberg_catalog:
+  name: "glue"  # Catalog type (glue, hive, etc.)
+  warehouse: "s3://your-bucket/iceberg-warehouse"  # S3 warehouse location
+  region_name: "us-east-1"  # AWS region
+iceberg_table: "your_database.your_table"  # Fully qualified table name
+
+# Data schema
+text_column: "text"  # Name of the column containing text for training
+columns:
+  - name: "text"
+    type: "string"
+    description: "Main text content for training"
+  - name: "label"
+    type: "string"
+    description: "Optional label or category"
+  # Add more columns as needed
+
+# Training defaults
+default_model: "distilgpt2"  # Default model to use
+default_max_length: 256  # Maximum sequence length
+default_batch_size: 2  # Training batch size
+default_epochs: 1  # Number of training epochs
+default_learning_rate: 5e-5  # Learning rate
+seed: 42  # Random seed for reproducibility
+
+# AWS resources
+checkpoint_bucket: "your-bucket"  # S3 bucket for model checkpoints
+checkpoint_prefix: "your_models"  # S3 prefix for checkpoints
+glue_database: "your_database"  # AWS Glue database name
+
+# Dataset statistics (optional)
+total_samples: null  # Total number of samples in dataset
+sample_format: "custom"  # Type/format of your data
+dataset_source: "custom"  # Source of the dataset
+
+# Example usage
+example_text: |
+  Provide an example of what a typical text entry looks like in your dataset.
+  This helps users understand the data format and content structure.

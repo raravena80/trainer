@@ -1,0 +1,91 @@
+apiVersion: kubeflow.org/v2beta1
+kind: TrainJob
+metadata:
+  name: ${DATASET_NAME}-training-${EXECUTION_ID}
+  namespace: ${NAMESPACE}
+spec:
+  trainPolicy:
+    image: python:3.11-slim
+    command:
+      - /bin/bash
+      - -c
+    args:
+      - |
+        # Install required dependencies
+        pip install transformers datasets pyarrow boto3 torch pyiceberg mypy_boto3_glue pyyaml
+
+        # Create working directory and copy the mounted scripts (follow symlinks)
+        mkdir -p /app
+        cp -rL /scripts/* /app/
+        cd /app
+
+        # Create lib directory and add required modules
+        mkdir -p /app/lib
+        cat > /app/lib/__init__.py << 'EOF'
+        # Arrow Cache Demo Library
+        EOF
+
+        # Create stub arrow_cache_client to prevent import errors
+        cat > /app/lib/arrow_cache_client.py << 'EOF'
+        class BaseArrowCacheClient:
+            def __init__(self, host="localhost", port=50051):
+                pass
+
+        class S3Utils:
+            pass
+        EOF
+
+        # Run generic training script
+        python3 generic_training.py \
+          --dataset-config=/app/configs/${DATASET_NAME}.yaml \
+          --model-name=${MODEL_NAME} \
+          --max-samples=${MAX_SAMPLES} \
+          --batch-size=${BATCH_SIZE} \
+          --max-length=${MAX_LENGTH} \
+          --epochs=${EPOCHS} \
+          --learning-rate=${LEARNING_RATE} \
+          --text-column=${TEXT_COLUMN} \
+          --head-host=${ARROW_CACHE_HEAD_HOST} \
+          --head-port=${ARROW_CACHE_HEAD_PORT} \
+          ${DRY_RUN_FLAG} \
+          ${SKIP_CHECKPOINT_FLAG} \
+          ${USE_IRSA_FLAG} \
+          ${USE_ARROW_CACHE_FLAG} \
+          ${IN_CLUSTER_FLAG}
+    env:
+      # Arrow Cache connection
+      - name: ARROW_CACHE_HEAD_HOST
+        value: "${ARROW_CACHE_HEAD_HOST}"
+      - name: ARROW_CACHE_HEAD_PORT
+        value: "${ARROW_CACHE_HEAD_PORT}"
+      # AWS configuration
+      - name: AWS_DEFAULT_REGION
+        value: "${AWS_REGION}"
+      # Disable tokenizers parallelism warning
+      - name: TOKENIZERS_PARALLELISM
+        value: "false"
+    # Single-node training
+    numNodes: 1
+    resourcesPerNode:
+      requests:
+        cpu: "${CPU_REQUEST}"
+        memory: "${MEMORY_REQUEST}"
+      limits:
+        cpu: "${CPU_LIMIT}"
+        memory: "${MEMORY_LIMIT}"
+
+  # Override pod spec to use IRSA service account and mount your scripts
+  podSpecOverrides:
+    - targetJobs:
+        - name: node
+      serviceAccountName: ${SERVICE_ACCOUNT}
+      volumes:
+        - name: training-scripts
+          configMap:
+            name: ${CONFIGMAP_NAME}
+      containers:
+        - name: node
+          volumeMounts:
+            - name: training-scripts
+              mountPath: /scripts
+              readOnly: true

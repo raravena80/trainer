@@ -1,0 +1,49 @@
+dataset_name: "regular"
+description: "Regular/generic dataset for distributed Arrow Cache demonstrations"
+
+# Arrow Cache configuration
+namespace: "arrow-cache"
+num_partitions: 4
+
+# Iceberg configuration
+iceberg_catalog:
+  name: "glue"
+  warehouse: "s3://ricardo.hf.datasets/iceberg-warehouse"
+  region_name: "us-east-1"
+iceberg_table: "hf_datasets.demo_data"  # This would be configured based on actual dataset
+
+# Data schema
+text_column: "text"  # Main column for training
+columns:
+  - name: "text"
+    type: "string"
+    description: "Main text content for training"
+  - name: "id"
+    type: "string"
+    description: "Unique identifier"
+  - name: "category"
+    type: "string"
+    description: "Data category or type"
+
+# Training defaults
+default_model: "distilgpt2"
+default_max_length: 256
+default_batch_size: 2
+default_epochs: 1
+default_learning_rate: 5e-5
+seed: 42
+
+# AWS resources
+checkpoint_bucket: "ricardo.hf.datasets"
+checkpoint_prefix: "regular_models"
+glue_database: "hf_datasets"
+
+# Dataset statistics
+total_samples: null  # To be determined based on actual data
+sample_format: "generic_text"
+dataset_source: "custom"
+
+# Example usage
+example_text: |
+  This is an example text entry that demonstrates the structure of data
+  in the regular/generic dataset format used for Arrow Cache demonstrations.

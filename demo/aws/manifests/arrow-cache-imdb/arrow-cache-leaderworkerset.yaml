@@ -1,0 +1,227 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: arrow-cache-imdb-lws
+  namespace: arrow-cache-imdb
+  labels:
+    app: arrow-cache-imdb
+    component: lws
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 3  # Number of worker pods per leader
+    leaderTemplate:
+      metadata:
+        labels:
+          app: arrow-cache-head
+          component: head
+      spec:
+        serviceAccountName: aws-service-account
+        containers:
+        - name: head
+          image: arrow-cache-demo:latest
+          imagePullPolicy: Never  # For local kind cluster
+          command: ["/usr/local/bin/head"]
+          args: ["0.0.0.0", "50051"]
+          ports:
+          - containerPort: 50051
+            name: grpc
+            protocol: TCP
+          env:
+          - name: METADATA_LOC
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: METADATA_LOC
+          - name: TABLE_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: TABLE_NAME
+          - name: SCHEMA_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: SCHEMA_NAME
+          - name: RUST_LOG
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: RUST_LOG
+          - name: WORKER_RUNTIME
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: WORKER_RUNTIME
+          - name: LWS_GROUP_SIZE
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: LWS_GROUP_SIZE
+          - name: WORKER_SERVICE_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: WORKER_SERVICE_NAME
+          - name: NAMESPACE
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: NAMESPACE
+          - name: AWS_REGION
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: AWS_REGION
+          volumeMounts:
+          - name: worker-config
+            mountPath: /etc/arrow-cache
+            readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+          livenessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+        volumes:
+        - name: worker-config
+          configMap:
+            name: arrow-cache-worker-map
+        restartPolicy: Always
+    workerTemplate:
+      metadata:
+        labels:
+          app: arrow-cache-worker
+          component: worker
+      spec:
+        serviceAccountName: aws-service-account
+        containers:
+        - name: worker
+          image: arrow-cache-demo:latest
+          imagePullPolicy: Never  # For local kind cluster
+          command: ["/usr/local/bin/worker"]
+          args: ["0.0.0.0", "50051"]
+          ports:
+          - containerPort: 50051
+            name: grpc
+            protocol: TCP
+          env:
+          - name: METADATA_LOC
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: METADATA_LOC
+          - name: TABLE_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: TABLE_NAME
+          - name: SCHEMA_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: SCHEMA_NAME
+          - name: RUST_LOG
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: RUST_LOG
+          - name: WORKER_RUNTIME
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: WORKER_RUNTIME
+          - name: AWS_REGION
+            valueFrom:
+              configMapKeyRef:
+                name: arrow-cache-config
+                key: AWS_REGION
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 5
+        restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: arrow-cache-head-svc
+  namespace: arrow-cache-imdb
+  labels:
+    app: arrow-cache-head
+    component: head
+spec:
+  type: ClusterIP
+  selector:
+    app: arrow-cache-head
+    component: head
+  ports:
+  - port: 50051
+    targetPort: 50051
+    protocol: TCP
+    name: grpc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: arrow-cache-worker-svc
+  namespace: arrow-cache-imdb
+  labels:
+    app: arrow-cache-worker
+    component: worker
+spec:
+  clusterIP: None  # Headless service for workers
+  selector:
+    app: arrow-cache-worker
+    component: worker
+  ports:
+  - port: 50051
+    targetPort: 50051
+    protocol: TCP
+    name: grpc
+---
+# Optional: LoadBalancer service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: arrow-cache-head-external
+  namespace: arrow-cache-imdb
+  labels:
+    app: arrow-cache-head
+    component: head
+spec:
+  type: LoadBalancer
+  selector:
+    app: arrow-cache-head
+    component: head
+  ports:
+  - port: 50051
+    targetPort: 50051
+    protocol: TCP
+    name: grpc

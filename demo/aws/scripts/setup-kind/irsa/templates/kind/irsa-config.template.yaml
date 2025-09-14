@@ -1,0 +1,29 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+kubeadmConfigPatches:
+- |-
+  kind: ClusterConfiguration
+  apiServer:
+    extraArgs:
+      service-account-signing-key-file: /etc/ca-certificates/irsa/oidc-issuer.key
+      service-account-key-file: /etc/ca-certificates/irsa/oidc-issuer.pub
+      api-audiences: sts.amazonaws.com
+      service-account-issuer: https://${ISSUER_HOSTPATH}
+nodes:
+- role: control-plane
+  extraMounts:
+  - hostPath: ${KEYS_PATH}/
+    containerPath: /etc/ca-certificates/irsa/
+    readOnly: true
+  extraPortMappings:
+  - containerPort: 30051
+    hostPort: 30051
+    protocol: TCP
+  - containerPort: 30052
+    hostPort: 30052
+    protocol: TCP
+- role: worker
+- role: worker
+- role: worker
+- role: worker
+- role: worker

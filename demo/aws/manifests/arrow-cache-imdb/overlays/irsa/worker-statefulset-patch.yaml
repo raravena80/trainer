@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: arrow-cache-worker
+spec:
+  template:
+    spec:
+      serviceAccountName: aws-service-account
+      containers:
+      - name: worker
+        env:
+        - $patch: replace
+        - name: METADATA_LOC
+          valueFrom:
+            configMapKeyRef:
+              name: arrow-cache-config
+              key: METADATA_LOC
+        - name: TABLE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: arrow-cache-config
+              key: TABLE_NAME
+        - name: SCHEMA_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: arrow-cache-config
+              key: SCHEMA_NAME
+        - name: RUST_LOG
+          valueFrom:
+            configMapKeyRef:
+              name: arrow-cache-config
+              key: RUST_LOG
+        - name: WORKER_RUNTIME
+          valueFrom:
+            configMapKeyRef:
+              name: arrow-cache-config
+              key: WORKER_RUNTIME
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: arrow-cache-config
+              key: AWS_REGION
+        # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN removed for IRSA

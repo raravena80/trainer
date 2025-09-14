@@ -1,0 +1,59 @@
+dataset_name: "alpaca"
+description: "Stanford Alpaca instruction-following dataset for training conversational AI models"
+
+# Arrow Cache configuration
+namespace: "arrow-cache-demo"
+num_partitions: 4
+
+# Iceberg configuration
+iceberg_catalog:
+  name: "glue"
+  warehouse: "s3://ricardo.hf.datasets/iceberg-warehouse"
+  region_name: "us-east-1"
+iceberg_table: "hf_datasets.tatsu-lab_alpaca"
+
+# Data schema
+text_column: "text"  # Main column for training
+columns:
+  - name: "instruction"
+    type: "string"
+    description: "The instruction given to the model"
+  - name: "input"
+    type: "string"
+    description: "Additional input context (optional)"
+  - name: "output"
+    type: "string"
+    description: "The expected output"
+  - name: "text"
+    type: "string"
+    description: "Combined formatted text for training"
+
+# Training defaults
+default_model: "distilgpt2"
+default_max_length: 128
+default_batch_size: 1
+default_epochs: 1
+default_learning_rate: 5e-5
+seed: 42
+
+# AWS resources
+checkpoint_bucket: "ricardo.hf.datasets"
+checkpoint_prefix: "alpaca_models"
+glue_database: "hf_datasets"
+
+# Dataset statistics
+total_samples: ~52000
+sample_format: "instruction_following"
+dataset_source: "https://github.com/tatsu-lab/stanford_alpaca"
+
+# Example usage
+example_text: |
+  Below is an instruction that describes a task. Write a response that appropriately completes the request.
+
+  ### Instruction:
+  Give three tips for staying healthy.
+
+  ### Response:
+  1. Eat a balanced diet with plenty of fruits and vegetables.
+  2. Exercise regularly to maintain physical fitness.
+  3. Get adequate sleep to allow your body to rest and recover.

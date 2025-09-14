@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Use the LeaderWorkerSet version of base arrow-cache-alpaca manifests and add IRSA service account
+resources:
+- ../../namespace.yaml
+- ../../configmap.yaml
+- ../../arrow-cache-leaderworkerset.yaml
+- aws-service-account.yaml
+
+# Patch LeaderWorkerSet to remove AWS credentials and add service account
+patches:
+- path: lws-patch.yaml
+  target:
+    kind: LeaderWorkerSet
+    name: arrow-cache-alpaca-lws
+
+images:
+- name: arrow-cache
+  newTag: latest
+
+commonLabels:
+  app.kubernetes.io/name: arrow-cache-alpaca
+  app.kubernetes.io/part-of: trainer
+  app.kubernetes.io/component: distributed-cache
